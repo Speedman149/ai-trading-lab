@@ -1,8 +1,8 @@
 [project]
 name = "ai-trading-lab"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = ["fastapi", "uvicorn", "pydantic-settings", "pandas", "numpy", "pyarrow", "duckdb", "backtrader", "exchange-calendars", "httpx"]
+version = "0.2.0"
+requires-python = ">=3.12"
+dependencies = ["fastapi", "uvicorn", "pydantic-settings", "pandas", "numpy", "pyarrow", "duckdb", "backtrader", "exchange-calendars", "httpx", "xgboost-cpu", "scikit-learn", "gymnasium"]
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
 [tool.pytest.ini_options]

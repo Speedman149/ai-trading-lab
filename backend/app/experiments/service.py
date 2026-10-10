@@ -7,7 +7,7 @@ from app.core.config import ROOT
 from app.core.schemas import BacktestRequest
 from app.data.market import load
 
-CODE_VERSION = "backtest-v3-actions"
+CODE_VERSION = "backtest-v4-observation"
 
 
 def execute(req: BacktestRequest):

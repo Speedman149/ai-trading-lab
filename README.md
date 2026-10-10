@@ -25,7 +25,7 @@ Open **http://localhost:3000**. API documentation: **http://localhost:8000/docs*
 
 Alternatively, `bash scripts/dev.sh` starts both servers in one terminal and stops both on Ctrl+C.
 
-For a fresh checkout: Python 3.11+, Node 22+, `python3 -m venv .venv`, `.venv/bin/pip install -r backend/requirements.lock`, then `cd frontend && npm ci`. Ubuntu may need `sudo apt install python3-venv`. This machine lacked ensurepip, so its isolated environment was bootstrapped with the official pip installer; no global Python packages were modified.
+For a fresh checkout: Python 3.12+, Node 22+, `python3 -m venv .venv`, `.venv/bin/pip install -r backend/requirements.lock`, then `cd frontend && npm ci`. Ubuntu may need `sudo apt install python3-venv`. This machine lacked ensurepip, so its isolated environment was bootstrapped with the official pip installer; no global Python packages were modified.
 
 ## What works
 
@@ -97,7 +97,7 @@ The browser tests start the production frontend and backend themselves; build fi
 - `frontend/app/page.tsx`, `globals.css`: integrated research interface.
 - `frontend/tests/research.spec.ts`: browser integration tests.
 
-Read [research methodology](docs/methodology.md) for exact simulation assumptions and [roadmap](docs/roadmap.md) for remaining work. This is a foundation, not a completed AI trading system. The next milestone is credentialed real equity verification and session-aligned intraday aggregation, before machine learning.
+Read [research methodology](docs/methodology.md) for exact simulation assumptions and [roadmap](docs/roadmap.md) for remaining work. Daily supervised training, experimental RL and manual model retraining are available on the AI Research page. See docs/ml-research.md for their evaluation contract.
 Verification evidence is recorded in [docs/verification.md](docs/verification.md).
 
 ## Connect real market data
@@ -117,3 +117,16 @@ ALPACA_FEED=iex
 Do not send keys in chat or commit this file. After saving, restart with bash scripts/dev.sh, select Alpaca, AAPL/SPY, and **1d**. Access to corporate actions is required too; if your account lacks access, the app reports that error instead of presenting an unchecked stock result. Provider entitlement issues cannot be solved by bypassing action validation.
 
 See [docs/corporate-actions.md](docs/corporate-actions.md) for the supported event rules and limitations.
+
+## AI Research
+
+Open **http://localhost:3000/research** (or select **AI Research** in the dashboard). Choose Alpaca and an asset, use at least two years of stock history, then **Train & Evaluate**. The current default is 2022-01-03 through 2025-01-01. Daily training runs as a background job.
+
+- XGBoost predicts next-open return and direction probability using causal features.
+- Purged chronological walk-forward validation and a final held-out test keep training information separate.
+- MAE/RMSE, directional accuracy, temporal rank correlation, probability calibration, net return, drawdown, turnover, Sharpe, regimes and simple baselines are shown.
+- Experimental Q-learning uses a Gymnasium environment backed by the same execution broker, with net-equity rewards and an optional drawdown penalty.
+- Saved versions include model files, provenance and exact input snapshots. **Refresh data & retrain** makes a new candidate. Promotion requires fixed validation criteria; previous active research versions can be restored.
+- Feature drift and recent forecast deterioration are reported. Retraining is manual; automatic scheduling, PPO and live/paper trading are later work.
+
+These are research models, and they may lose, stay in cash or fail to beat simple baselines. Synthetic training results do not establish market performance. See [model methodology and research sources](docs/ml-research.md) for the complete protocol, reward, acceptance criteria and API/CLI instructions.

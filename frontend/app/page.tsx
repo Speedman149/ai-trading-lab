@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   ResponsiveContainer,
@@ -165,6 +166,12 @@ export default function Page() {
           only
         </div>
       </header>
+      <nav className="workspace-nav">
+        <Link href="/" aria-current="page">
+          Historical Backtesting
+        </Link>
+        <Link href="/research">AI Research</Link>
+      </nav>
       <div className="tag">Research workspace / Historical simulation</div>
       <h1>Test ideas. Measure outcomes.</h1>
       <p>

@@ -35,3 +35,16 @@ This update supersedes the previous equity-accounting limitation.
 - Credentials stayed in local configuration. The tracked template contains no credential values.
 
 Supported stock actions are ordinary cash dividends and forward/reverse splits. Advanced events remain rejected. These checks verify accounting and provider integration, not strategy profitability or exhaustive vendor coverage.
+## ML, RL and manual retraining milestone — 2026-10-10
+
+- Full backend suite: **69 passed**. Covers causal features, hand-calculated split/dividend labels and RL fees/reward, horizon-1/5 purge boundaries, disjoint calibration, held-out market isolation, deterministic training, JSON model reload, frozen RL evaluation, jobs, snapshots, refresh, acceptance checks and rollback.
+- Ruff lint and formatting pass. Python compilation and the CPU-only dependency installation succeed.
+- Next production build, TypeScript, ESLint and Prettier pass.
+- Browser suite: **8 passed**, including original stock/crypto simulations, XGBoost job/evaluation agreement, calibration, saved-version reload, RL N/A prediction diagnostics, short-history errors and mobile layout.
+- Screenshots visually inspected. Mobile chart overflow found during QA was corrected and verified by the browser suite.
+- Final chronological protocol is research-v4: training labels finish before the first evaluation candle opens; validation labels and portfolio marks stop before the held-out market period, including multi-bar horizons.
+- Real AAPL 2022-01-03 to 2025-01-01 trained successfully. Final saved version 28595236071eb075408da694 has 139 held-out predictions, MAE about 1.076 percentage points and directional accuracy about 56.1%. The trading rule stayed in cash in that test and failed validation acceptance; this is a reported result, not a model-success claim.
+- Manual API retraining refreshed real Alpaca history through the current exclusive end date, preserving the prior version. Version b98efd84a771633b97710fdd uses 1,197 real daily bars and compares 339 forward validation samples against the reference model. It remains ineligible for promotion. Exact provider input/action snapshots and reports are saved locally.
+- Research page responds HTTP 200, with both development servers running locally.
+- Remaining warnings: existing Starlette/httpx TestClient deprecation and Gymnasium's informational warnings about unbounded observation-space limits. These checks pass; the Q agent discretizes finite observed features.
+- Generated datasets/models, API credentials and QA images are excluded from Git. Automatic scheduling, deep PPO, multi-asset research and ongoing paper/live trading are outside this milestone.

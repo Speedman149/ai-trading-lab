@@ -151,6 +151,7 @@ select {
   margin-bottom: 20px;
 }
 .chart {
+  overflow: hidden;
   height: 300px;
 }
 .legend {
@@ -256,4 +257,66 @@ input[type="date"] {
 }
 details p {
   overflow-wrap: anywhere;
+}
+
+.workspace-nav {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 28px;
+}
+.workspace-nav a,
+.button-row button {
+  border: 1px solid #35435a;
+  background: #111a28;
+  color: #bdcadf;
+  padding: 10px 14px;
+  border-radius: 7px;
+  font-size: 13px;
+  text-decoration: none;
+}
+.workspace-nav a[aria-current="page"],
+.button-row button[aria-pressed="true"] {
+  border-color: #64dec2;
+  color: #64dec2;
+  background: #17262a;
+}
+.button-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.saved-models {
+  margin-top: 20px;
+}
+.version {
+  padding: 16px 0;
+  border-top: 1px solid #253044;
+  font-size: 13px;
+}
+.version p {
+  font-size: 12px;
+}
+.feature-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(60px, 2fr) 65px;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0;
+  font-size: 12px;
+  color: #a9b8cd;
+}
+.feature-row meter {
+  width: 100%;
+  height: 14px;
+  accent-color: #64dec2;
+}
+.criteria {
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.grid > *,
+section {
+  min-width: 0;
 }

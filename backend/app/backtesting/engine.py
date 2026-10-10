@@ -98,7 +98,10 @@ class ResearchStrategy(bt.Strategy):
                 "dividend_receivable": self.broker.receivable,
             }
         )
-        if i == len(self.p.frame) - 1:
+        terminal = i == len(self.p.frame) - 1
+        if hasattr(self.p.logic, "observe"):
+            self.p.logic.observe(self.curve[-1].copy(), terminal)
+        if terminal:
             return
         history = self.p.frame.iloc[: i + 1]
         history.attrs = {}  # Do not expose future action records through DataFrame metadata.

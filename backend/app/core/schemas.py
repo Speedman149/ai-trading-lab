@@ -31,8 +31,8 @@ class BacktestRequest(BaseModel):
     def validate_range(self):
         if self.start >= self.end:
             raise ValueError("Start must precede end (end date is exclusive)")
-        if (self.end - self.start).days > 730:
-            raise ValueError("MVP requests are limited to 730 days")
+        if (self.end - self.start).days > 3650:
+            raise ValueError("Requests are limited to 3650 days")
         if self.fast >= self.slow:
             raise ValueError("Fast window must be smaller than slow window")
         return self

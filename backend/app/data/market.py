@@ -232,7 +232,7 @@ class AlpacaProvider:
         return actions
 
 
-def load(req):
+def load(req, refresh=False):
     if len(expected_times(req.asset, req.timeframe, req.start, req.end)) > 100000:
         raise DataError("MVP experiments are limited to 100,000 bars; select a shorter range")
     key_fields = {
@@ -243,7 +243,7 @@ def load(req):
     folder = ROOT / "data" / "processed"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{key}.parquet"
-    if path.exists():
+    if path.exists() and not refresh:
         with duckdb.connect() as conn:
             conn.execute("SET TimeZone = 'UTC'")
             df = conn.execute("SELECT * FROM read_parquet(?) ORDER BY timestamp", [str(path)]).df()

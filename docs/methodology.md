@@ -33,3 +33,6 @@ Drawdown uses an initial-capital floor for the running peak. Turnover is total a
 Every saved experiment includes inputs, dataset provenance/content hash, code version, modeled assumptions, metrics, fill/trade history, rejection records, equity/exposure, and benchmark. Identical inputs/data/service version yield the same experiment identifier and deterministic results. Artifacts persist as local JSON and are atomically replaced; they are not an experiment database. Version constants must change when simulation semantics change.
 
 No broad-universe research, survivorship-bias correction, advanced corporate-action types, multi-asset portfolio, measured spreads, market impact, asynchronous jobs, model training, news, or paper/live trading is implemented. Requests are limited to 730 days and 100,000 bars. API is intended for loopback local use, without authentication. Before deployment, add authentication, resource quotas, and job execution. No performance shown on synthetic data is a market claim.
+## Model research
+
+Daily ML/RL training, purged chronological evaluation, probability calibration, the net-equity reward, model drift and manual retraining follow [docs/ml-research.md](ml-research.md). All evaluated portfolios still use this execution contract; promotion changes only the saved research-model registry.
