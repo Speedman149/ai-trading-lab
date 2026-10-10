@@ -142,6 +142,7 @@ def searches():
                 "provider": data["config"]["research"]["backtest"]["provider"],
                 "trials": len(data["trials"]),
                 "objective": data["config"]["objective"],
+                "mode": data["config"].get("mode", "random"),
                 "winner_id": data["winner_id"],
             }
         )

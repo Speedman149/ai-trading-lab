@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import SearchResults, {
+  searchMethodLabels,
   type SearchReport,
   type SearchSummary,
 } from "./search-results";
@@ -105,12 +106,16 @@ type Report = {
     regression_trees?: number;
     direction_trees?: number | null;
     best_iteration?: number;
+    core_rows?: number;
+    early_stopping_rows?: number;
+    calibration_rows?: number;
   };
   validation: Evaluation;
   holdout: Evaluation;
   walk_forward: {
     fold: number;
     training_rows: number;
+    training?: { regression_trees?: number; direction_trees?: number | null };
     training_label_end: string;
     evaluation_start: string;
     prediction: Prediction;
@@ -207,7 +212,10 @@ export default function ResearchPage() {
   const [submissionKind, setSubmissionKind] = useState<"train" | "search">(
     "train",
   );
-  const [searchTrials, setSearchTrials] = useState(12);
+  const [searchTrials, setSearchTrials] = useState(32);
+  const [searchMode, setSearchMode] = useState<
+    "random" | "coarse_to_fine" | "local"
+  >("coarse_to_fine");
   const [searchObjective, setSearchObjective] = useState<
     "sharpe" | "net_return"
   >("sharpe");
@@ -328,7 +336,7 @@ export default function ResearchPage() {
     label: string,
     min: number,
     max: number,
-    step = 1,
+    step: number | "any" = 1,
   ) => (
     <div>
       <label htmlFor={key}>{label}</label>
@@ -415,6 +423,7 @@ export default function ResearchPage() {
                     research: researchConfig(),
                     trials: searchTrials,
                     objective: searchObjective,
+                    mode: searchMode,
                   }
                 : researchConfig(),
             ),
@@ -467,6 +476,7 @@ export default function ResearchPage() {
       ?.scrollIntoView({ block: "start" });
     setSearchTrials(searchReport.config.trials);
     setSearchObjective(searchReport.config.objective);
+    setSearchMode(searchReport.config.mode || "random");
     setMessage(
       "Best-found settings and their data/cost configuration copied into the training form.",
     );
@@ -693,7 +703,13 @@ export default function ResearchPage() {
                     {numeric("horizon", "Forecast horizon (bars)", 1, 5)}
                     {numeric("max_depth", "Tree depth", 1, 6)}
                     {numeric("n_estimators", "Maximum trees", 20, 600)}
-                    {numeric("learning_rate", "Learning rate", 0.01, 0.3, 0.01)}
+                    {numeric(
+                      "learning_rate",
+                      "Learning rate",
+                      0.01,
+                      0.3,
+                      "any",
+                    )}
                   </div>
                   <div className="pair">
                     {numeric(
@@ -701,13 +717,14 @@ export default function ResearchPage() {
                       "Extra return hurdle (bps)",
                       0,
                       200,
+                      "any",
                     )}
                     {numeric(
                       "probability_threshold",
                       "Entry probability",
                       0.5,
                       0.9,
-                      0.01,
+                      "any",
                     )}
                   </div>
                   <p className="subtle">
@@ -723,22 +740,23 @@ export default function ResearchPage() {
                         "Training row fraction",
                         0.5,
                         1,
-                        0.1,
+                        "any",
                       )}
                       {numeric(
                         "colsample_bytree",
                         "Feature fraction per tree",
                         0.5,
                         1,
-                        0.1,
+                        "any",
                       )}
                       {numeric(
                         "min_child_weight",
                         "Minimum child weight",
                         1,
                         20,
+                        "any",
                       )}
-                      {numeric("reg_lambda", "L2 regularization", 0, 50)}
+                      {numeric("reg_lambda", "L2 regularization", 0, 50, "any")}
                     </div>
                     <p className="subtle">
                       Sampling uses a subset of training rows or features for
@@ -822,6 +840,25 @@ export default function ResearchPage() {
               {form.algorithm === "xgboost" && (
                 <fieldset className="search-settings" disabled={running}>
                   <legend>Automatic parameter search</legend>
+                  <label htmlFor="search-mode">Search method</label>
+                  <select
+                    id="search-mode"
+                    value={searchMode}
+                    onChange={(e) =>
+                      setSearchMode(e.target.value as typeof searchMode)
+                    }
+                  >
+                    <option value="coarse_to_fine">Broad then refine</option>
+                    <option value="local">Refine current settings</option>
+                    <option value="random">Broad random search</option>
+                  </select>
+                  <p className="subtle">
+                    {searchMode === "coarse_to_fine"
+                      ? "Use half the trials for broad choices, then make smaller changes around the two best validation candidates."
+                      : searchMode === "local"
+                        ? "Keep the current feature set and entry rule. Try nearby thresholds and tree settings, plus paired entry thresholds."
+                        : "Sample widely spaced combinations across all feature sets, entry rules and tree settings."}
+                  </p>
                   <label htmlFor="search-trials">Parameter trials (2–48)</label>
                   <input
                     id="search-trials"
@@ -949,15 +986,16 @@ export default function ResearchPage() {
             )}
             {(showAllSearches ? searchRuns : searchRuns.slice(0, 6)).map(
               (run) => (
-                <div className="version" key={run.id}>
+                <div className="version" key={run.id} data-search-id={run.id}>
                   <strong>
                     {run.asset} ·{" "}
-                    {run.provider === "synthetic" ? "SYNTHETIC" : "Alpaca"}
+                    {run.provider === "synthetic" ? "SYNTHETIC" : "Alpaca"} ·{" "}
+                    {run.id.slice(0, 8)}
                   </strong>
                   <p>
                     {run.trials} trials ·{" "}
                     {run.objective === "sharpe" ? "Sharpe" : "Net return"} ·{" "}
-                    {run.status}
+                    {run.status} · {searchMethodLabels[run.mode || "random"]}
                     <br />
                     {run.created_at.slice(0, 16).replace("T", " ")}
                   </p>
@@ -1039,6 +1077,14 @@ export default function ResearchPage() {
               result={searchReport}
               running={running}
               onApply={applyWinner}
+              onRefine={() => {
+                applyWinner();
+                setSearchMode("local");
+                setSearchTrials(32);
+                setMessage(
+                  "Winning settings restored. Local refinement is ready; click Find best parameters to run it.",
+                );
+              }}
             />
           )}
           {!report && !searchReport && !running && (
@@ -1107,6 +1153,12 @@ export default function ResearchPage() {
                   : "Walk-forward validation"}{" "}
                 · {evaluation.prediction.samples} predictions
               </h2>
+              <p className="subtle" id="return-window-help">
+                Evaluation:{" "}
+                {evaluation.strategy.equity[0]?.timestamp.slice(0, 10)} to{" "}
+                {evaluation.strategy.equity.at(-1)?.timestamp.slice(0, 10)}. Net
+                return is for this whole window, not a monthly or annual rate.
+              </p>
               <div className="stats">
                 {[
                   [
@@ -1126,7 +1178,12 @@ export default function ResearchPage() {
                   </div>
                 ))}
               </div>
-              {evaluation.activity && <Activity data={evaluation.activity} />}
+              {evaluation.activity && (
+                <Activity
+                  data={evaluation.activity}
+                  metrics={evaluation.strategy.metrics}
+                />
+              )}
               <div className="panel charts">
                 <h2>AI portfolio vs simple baselines</h2>
                 <div className="legend">
@@ -1352,12 +1409,18 @@ export default function ResearchPage() {
               </div>
               <div className="panel charts">
                 <h2>Walk-forward folds</h2>
+                <p className="subtle">
+                  Compare all blocks: a gain concentrated in one fold is weak
+                  evidence of a repeatable strategy. Fold returns start from
+                  fresh capital and are not added together.
+                </p>
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
                         <th>Fold</th>
                         <th>Train rows</th>
+                        <th>Return / direction trees used</th>
                         <th>Last label known</th>
                         <th>First prediction</th>
                         <th>MAE</th>
@@ -1370,6 +1433,10 @@ export default function ResearchPage() {
                         <tr key={f.fold}>
                           <td>{f.fold}</td>
                           <td>{f.training_rows}</td>
+                          <td>
+                            {f.training?.regression_trees ?? "N/A"} /{" "}
+                            {f.training?.direction_trees ?? "N/A"}
+                          </td>
                           <td>{f.training_label_end.slice(0, 10)}</td>
                           <td>{f.evaluation_start.slice(0, 10)}</td>
                           <td>{percent(f.prediction.mae)}</td>

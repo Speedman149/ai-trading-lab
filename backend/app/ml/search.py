@@ -22,6 +22,18 @@ SPACE = {
     "min_child_weight": [1, 5, 10],
     "reg_lambda": [1, 5, 10],
 }
+# Step, lower bound, upper bound. Local trials keep feature set and entry rule fixed.
+LOCAL = {
+    "probability_threshold": (0.01, 0.5, 0.9),
+    "min_edge_bps": (2.5, 0, 200),
+    "learning_rate": (0.01, 0.01, 0.3),
+    "max_depth": (1, 1, 6),
+    "min_child_weight": (1, 1, 20),
+    "reg_lambda": (1, 0, 50),
+    "subsample": (0.05, 0.5, 1),
+    "colsample_bytree": (0.05, 0.5, 1),
+    "n_estimators": (40, 20, 600),
+}
 POLICY = (
     "Rank candidates passing all promotion checks first, then candidates within "
     "20% maximum drawdown and 20x turnover limits, then the selected validation metric. "
@@ -46,6 +58,97 @@ def candidates(request):
             parameters.append(sample)
             seen.add(signature)
     return [ResearchRequest.model_validate({**base.model_dump(), **params}) for params in parameters]
+
+
+def signature(config):
+    return tuple(
+        0 if key == "min_edge_bps" and config.entry_rule == "probability_only" else getattr(config, key)
+        for key in SPACE
+    )
+
+
+def neighbors(center):
+    # Start with single-setting changes, then paired entry gates at the same radius.
+    # Increase the radius only after testing the nearest changes in every setting.
+    for radius in range(1, 51):
+        for key, (step, lower, upper) in LOCAL.items():
+            if key == "min_edge_bps" and center.entry_rule == "probability_only":
+                continue
+            for direction in (-1, 1):
+                value = round(min(upper, max(lower, getattr(center, key) + direction * radius * step)), 8)
+                if key in ("max_depth", "n_estimators"):
+                    value = int(value)
+                if value != getattr(center, key):
+                    yield ResearchRequest.model_validate({**center.model_dump(), key: value})
+        # Joint gates interact: changing either alone can still leave every entry blocked.
+        if center.entry_rule == "return_and_probability":
+            for probability_direction in (-1, 1):
+                for edge_direction in (-1, 1):
+                    yield ResearchRequest.model_validate(
+                        {
+                            **center.model_dump(),
+                            "probability_threshold": round(
+                                min(
+                                    0.9,
+                                    max(
+                                        0.5,
+                                        center.probability_threshold + probability_direction * radius * 0.01,
+                                    ),
+                                ),
+                                8,
+                            ),
+                            "min_edge_bps": round(
+                                min(200, max(0, center.min_edge_bps + edge_direction * radius * 2.5)), 8
+                            ),
+                        }
+                    )
+
+
+def candidate_plan(request, recorded_trials):
+    """Adapt only to completed validation scores; never read a winner's test report."""
+    if request.mode == "random":
+        for index, config in enumerate(candidates(request)):
+            yield config, "current" if index == 0 else "broad", None
+        return
+    broad_count = 1 if request.mode == "local" else max(1, request.trials // 2)
+    seen = set()
+    for index, config in enumerate(candidates(request.model_copy(update={"trials": broad_count})), 1):
+        seen.add(signature(config))
+        yield config, "current" if index == 1 else "broad", None
+    completed = [
+        trial for trial in rank_trials(recorded_trials(), request.objective) if trial["status"] == "completed"
+    ]
+    # Freeze the two broad leaders before refinement. Local mode starts at the submitted settings.
+    centers = (
+        [
+            (
+                ResearchRequest.model_validate({**request.research.model_dump(), **trial["parameters"]}),
+                trial["trial"],
+            )
+            for trial in completed[:2]
+        ]
+        if request.mode == "coarse_to_fine"
+        else []
+    )
+    if not centers:
+        centers = [(request.research, 1)]
+    queues = [(iter(neighbors(config)), trial) for config, trial in centers]
+    remaining = request.trials - broad_count
+    while remaining:
+        advanced = False
+        for queue, origin in queues:
+            for config in queue:
+                key = signature(config)
+                if key not in seen:
+                    seen.add(key)
+                    remaining -= 1
+                    advanced = True
+                    yield config, "refine", origin
+                    break
+            if remaining == 0:
+                return
+        if not advanced:
+            raise ValueError("No unique local candidates remain; use a smaller trial budget.")
 
 
 def ranking_key(trial, objective):
@@ -83,8 +186,18 @@ def execute(request, identifier, progress=lambda message: None):
         "status": "running",
         "created_at": datetime.now(UTC).isoformat(),
         "config": request.model_dump(mode="json"),
-        "space": SPACE,
+        "space": {} if request.mode == "local" else SPACE,
         "selection_policy": POLICY,
+        "refinement": None
+        if request.mode == "random"
+        else {
+            "steps": {
+                key: {"step": step, "minimum": low, "maximum": high}
+                for key, (step, low, high) in LOCAL.items()
+            },
+            "broad_trials": 1 if request.mode == "local" else max(1, request.trials // 2),
+            "note": "Numeric changes and joint probability/hurdle pairs around the submitted configuration (local) or the two highest-ranked broad validation candidates (broad then refine). Nearest neighbors are tried first; feature set and entry rule stay fixed within each neighborhood. Final-test scores never choose refinement centers.",
+        },
         "code_version": service.CODE_VERSION,
         "provenance": prepared["provenance"],
         "validation_start": prepared["plan"][0][1].signal_time.iloc[0].isoformat(),
@@ -103,9 +216,11 @@ def execute(request, identifier, progress=lambda message: None):
     storage.atomic_json(target, result)
     best = None
     try:
-        for index, config in enumerate(candidates(request), 1):
+        for index, (config, phase, origin) in enumerate(candidate_plan(request, lambda: result["trials"]), 1):
             trial = {
                 "trial": index,
+                "phase": phase,
+                "origin_trial": origin,
                 "rank": None,
                 "parameters": {key: getattr(config, key) for key in SPACE},
                 "status": "completed",
@@ -122,7 +237,9 @@ def execute(request, identifier, progress=lambda message: None):
                 validated = service.validate(
                     config,
                     prepared,
-                    lambda message, i=index: progress(f"Trial {i}/{request.trials}: {message}"),
+                    lambda message, i=index, stage=phase: progress(
+                        f"Trial {i}/{request.trials} ({stage}): {message}"
+                    ),
                 )
                 validation = validated["validation"]
                 metrics = validation["strategy"]["metrics"]
@@ -170,6 +287,7 @@ def execute(request, identifier, progress=lambda message: None):
                 "selected_trial": best[0]["trial"],
                 "trials": request.trials,
                 "objective": request.objective,
+                "mode": request.mode,
                 "selection_policy": POLICY,
             },
         )

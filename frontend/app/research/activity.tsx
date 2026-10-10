@@ -20,10 +20,26 @@ export type ActivityData = {
 };
 const percent = (value: number | null) =>
   value == null ? "N/A" : (value * 100).toFixed(2) + "%";
-export default function Activity({ data }: { data: ActivityData }) {
+export default function Activity({
+  data,
+  metrics,
+}: {
+  data: ActivityData;
+  metrics?: Record<string, number | null>;
+}) {
   return (
     <div className="panel charts activity-diagnostics">
       <h2>What drove these results?</h2>
+      {metrics && (
+        <p className="subtle">
+          Gross return on the same fills:{" "}
+          {percent(metrics.gross_return_same_fills ?? null)} · Net return:{" "}
+          {percent(metrics.net_return ?? null)}. Modeled trading costs: $
+          {metrics.transaction_costs?.toFixed(2) ?? "N/A"}. Gross return
+          excludes costs from the same executed trades; it does not rerun the
+          strategy with cheaper costs.
+        </p>
+      )}
       <dl className="parameter-grid">
         <div>
           <dt>Buy-and-hold net return</dt>

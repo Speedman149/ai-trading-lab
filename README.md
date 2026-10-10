@@ -135,3 +135,10 @@ These are research models, and they may lose, stay in cash or fail to beat simpl
 ### Research diagnostics and parameter recovery
 
 Saved model reports now show their parameters with restore/export controls. Search winners automatically populate the form. **Re-run saved dates** and **Retrain through today** distinguish fixed-history comparisons from updated market periods. Signal diagnostics explain inactivity and underperformance relative to buy-and-hold. XGBoost search also varies expanded technical features, probability-only decisions, sampling and regularization. See [script comparison and retraining behavior](docs/script-comparison.md).
+
+
+### Precise searches and low-return diagnostics
+
+**Broad then refine** now uses half the trial budget for broad choices and the remainder for smaller changes around the two strongest validation candidates. **Refine current settings** keeps the feature set and trading rule fixed; **Refine winning settings** restores a saved winner and prepares local refinement. The website defaults to 32 trials, bounded to 48. Search reports preserve each trial's phase and origin, refinement steps, winner parameters, costs and profitable-fold count. Final tests never choose the refinement centers.
+
+Reports also state the actual evaluation dates, gross versus net return on the same fills, fitting/calibration sample counts and trees used in every fold. A small return or very few selected trees can indicate weak predictive signal; a larger parameter search does not establish future profitability. See [search methods and interpretation](docs/ml-research.md).

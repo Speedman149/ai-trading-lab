@@ -23,7 +23,7 @@ from app.ml.models import BoostModel
 from app.ml.rl import QModel
 from app.ml.schemas import ResearchRequest
 
-CODE_VERSION = "research-v6.1-" + ENGINE_VERSION
+CODE_VERSION = "research-v7-" + ENGINE_VERSION
 
 
 def load_model(identifier):

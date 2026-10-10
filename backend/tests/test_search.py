@@ -80,7 +80,10 @@ def test_search_ranking_hand_calculated(objective, expected):
     assert search.rank_trials([tied, rows[0]], objective)[0]["trial"] == 1
 
 
-def test_search_only_tests_selected_winner_and_heldout_changes_cannot_change_ranking(research, monkeypatch):
+@pytest.mark.parametrize("mode", ["random", "coarse_to_fine", "local"])
+def test_search_only_tests_selected_winner_and_heldout_changes_cannot_change_ranking(
+    research, monkeypatch, mode
+):
     config, frame, provenance = research
     samples = make_samples(frame, config.backtest, config.horizon)
     _, _, holdout = chronological_plan(samples, config.holdout_fraction, config.folds)
@@ -107,7 +110,7 @@ def test_search_only_tests_selected_winner_and_heldout_changes_cannot_change_ran
 
     monkeypatch.setattr(service, "evaluate", tracked)
     monkeypatch.setattr(service, "load", provider)
-    request = SearchRequest(research=config, trials=2)
+    request = SearchRequest(research=config, trials=6, mode=mode)
     first = search.execute(request, "a" * 24)
     assert calls == [False] * (request.trials * (config.folds + 1)) + [True]
     assert len(downloads) == 1
@@ -174,7 +177,7 @@ def test_search_records_trial_failure_and_never_tests_failed_candidates(research
 def test_search_api_job_concurrency_persistence_and_input_errors(research, monkeypatch):
     config, _, _ = research
     client = TestClient(app)
-    for update in ({"trials": 49}, {"trials": 1}, {"objective": "accuracy"}):
+    for update in ({"trials": 49}, {"trials": 1}, {"objective": "accuracy"}, {"mode": "test_return"}):
         assert (
             client.post(
                 "/api/research/searches",
@@ -228,3 +231,65 @@ def test_search_api_job_concurrency_persistence_and_input_errors(research, monke
     jobs.initialize()
     assert jobs.retrieve(job["id"])["kind"] == "search"
     assert jobs.retrieve(job["id"])["status"] == "completed"
+
+
+@pytest.mark.parametrize("entry_rule", ["return_and_probability", "probability_only"])
+def test_local_candidates_are_bounded_unique_and_preserve_data_and_model_family(research, entry_rule):
+    config, _, _ = research
+    config = config.model_copy(update={"entry_rule": entry_rule, "subsample": 0.8, "colsample_bytree": 0.8})
+    request = SearchRequest(research=config, trials=48, mode="local")
+    first = list(search.candidate_plan(request, list))
+    assert first == list(search.candidate_plan(request, list))
+    assert first[0] == (config, "current", None)
+    assert len(first) == len({search.signature(candidate) for candidate, _, _ in first}) == 48
+    fixed = config.model_dump(exclude=set(search.LOCAL))
+    assert all(candidate.model_dump(exclude=set(search.LOCAL)) == fixed for candidate, _, _ in first)
+    for candidate, phase, origin in first[1:]:
+        assert phase == "refine" and origin == 1
+        changed = {key for key in search.LOCAL if getattr(candidate, key) != getattr(config, key)}
+        assert len(changed) == 1 or changed == {"min_edge_bps", "probability_threshold"}
+        for key, (_, low, high) in search.LOCAL.items():
+            assert low <= getattr(candidate, key) <= high
+    assert first[1][0].probability_threshold == pytest.approx(0.54)
+    assert first[2][0].probability_threshold == pytest.approx(0.56)
+    if entry_rule == "probability_only":
+        assert all(candidate.min_edge_bps == config.min_edge_bps for candidate, _, _ in first)
+
+
+def test_refinement_centers_follow_broad_validation_rank_and_are_frozen(research):
+    config, _, _ = research
+    request = SearchRequest(research=config, trials=12, mode="coarse_to_fine", objective="net_return")
+    recorded = []
+    plan = search.candidate_plan(request, lambda: recorded)
+    broad = []
+    for index in range(1, 7):
+        candidate, phase, origin = next(plan)
+        broad.append(candidate)
+        assert phase == ("current" if index == 1 else "broad") and origin is None
+        # Returns 1..6% on $10,000 mean profits $100..$600. Trial 6's 30%
+        # drawdown fails the guardrail, so centers are trials 5 and 4.
+        recorded.append(
+            {
+                "trial": index,
+                "status": "completed",
+                "parameters": {key: getattr(candidate, key) for key in search.SPACE},
+                "metrics": {
+                    "net_return": index / 100,
+                    "sharpe": 1,
+                    "max_drawdown": -0.3 if index == 6 else -0.1,
+                    "turnover": 2,
+                },
+                "prediction": {"mae": 0.01},
+                "promotion": {"eligible": False},
+                "risk_passed": index != 6,
+            }
+        )
+    candidate, phase, origin = next(plan)
+    assert phase == "refine" and origin == 5
+    changed = [key for key in search.SPACE if getattr(candidate, key) != getattr(broad[4], key)]
+    assert changed == ["probability_threshold"]
+    # A later refinement's enormous score must not redefine the frozen broad centers.
+    recorded.append({**recorded[0], "trial": 7, "metrics": {**recorded[0]["metrics"], "net_return": 100}})
+    remaining = list(plan)
+    assert {origin for _, _, origin in remaining} == {4, 5}
+    assert len(remaining) == 5

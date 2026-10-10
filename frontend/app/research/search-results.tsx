@@ -1,6 +1,11 @@
 "use client";
 import { parameterLabels, settingValue } from "./config";
 import type { ActivityData } from "./activity";
+export const searchMethodLabels = {
+  random: "Broad random search",
+  coarse_to_fine: "Broad then refine",
+  local: "Refine current settings",
+};
 export type SearchParameters = {
   n_estimators: number;
   max_depth: number;
@@ -16,6 +21,8 @@ export type SearchParameters = {
 };
 export type SearchTrial = {
   trial: number;
+  phase?: "current" | "broad" | "refine";
+  origin_trial?: number | null;
   rank: number | null;
   parameters: SearchParameters;
   status: string;
@@ -50,9 +57,15 @@ export type SearchReport = {
     };
     trials: number;
     objective: "sharpe" | "net_return";
+    mode?: "random" | "coarse_to_fine" | "local";
   };
   space: Record<string, (string | number)[]>;
   selection_policy: string;
+  refinement?: {
+    steps: Record<string, { step: number; minimum: number; maximum: number }>;
+    broad_trials: number;
+    note: string;
+  } | null;
   provenance: { synthetic: boolean };
   validation_start: string;
   validation_end: string;
@@ -71,6 +84,7 @@ export type SearchSummary = {
   status: string;
   trials: number;
   objective: string;
+  mode?: keyof typeof searchMethodLabels;
   winner_id: string | null;
   parameters?: SearchParameters | null;
 };
@@ -82,10 +96,12 @@ export default function SearchResults({
   result,
   running,
   onApply,
+  onRefine,
 }: {
   result: SearchReport;
   running: boolean;
   onApply: () => void;
+  onRefine: () => void;
 }) {
   const winner = result.trials.find(
     (trial) => trial.trial === result.selected_trial,
@@ -99,6 +115,7 @@ export default function SearchResults({
           ? "SYNTHETIC demonstration"
           : "Alpaca history"}
         <br />
+        {searchMethodLabels[result.config.mode || "random"]} ·{" "}
         {result.trials.length} / {result.config.trials} trials · Ranked by
         validation{" "}
         {result.config.objective === "sharpe" ? "Sharpe" : "net return"}
@@ -150,6 +167,16 @@ export default function SearchResults({
             )}{" "}
             · Completed trades: {winner.metrics?.closed_trades ?? "N/A"}
           </p>
+          <p className="subtle">
+            Gross return on the same fills:{" "}
+            {percent(winner.metrics?.gross_return_same_fills)} · Modeled trading
+            costs: ${winner.metrics?.transaction_costs?.toFixed(2) ?? "N/A"}.
+            Profitable folds:{" "}
+            {winner.folds.filter((fold) => fold.net_return > 0).length} /{" "}
+            {winner.folds.length}. The net return covers the validation dates
+            above, not a monthly or annual rate. Folds start with fresh capital
+            and cannot be added together.
+          </p>
           {!result.trials.some((trial) => trial.promotion?.eligible) && (
             <p className="notice">
               No candidate passed all validation checks. The selected settings
@@ -160,6 +187,9 @@ export default function SearchResults({
           <div className="button-row">
             <button type="button" disabled={running} onClick={onApply}>
               Use best-found settings
+            </button>
+            <button type="button" disabled={running} onClick={onRefine}>
+              Refine winning settings
             </button>
           </div>
         </>
@@ -195,6 +225,7 @@ export default function SearchResults({
               <th>Learning rate</th>
               <th>Hurdle / entry</th>
               <th>Validation checks</th>
+              <th>Search phase</th>
             </tr>
           </thead>
           <tbody>
@@ -255,27 +286,53 @@ export default function SearchResults({
                           ).length ?? 0,
                         ) + " failed")}
                 </td>
+                <td>
+                  {trial.phase === "refine"
+                    ? "Refine from trial " + trial.origin_trial
+                    : trial.phase || "Broad"}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <details>
-        <summary>Search ranges</summary>
-        <ul>
-          {Object.entries(result.space).map(([key, values]) => (
-            <li key={key}>
-              {parameterLabels[key] || key}: {values.join(", ")}
-            </li>
-          ))}
-        </ul>
-        <p className="subtle">
-          Your current settings are always included as trial 1. Additional
-          combinations are sampled with the same random seed. Feature sets,
-          trading rules and regularization also vary. The data, horizon, costs
-          and validation split stay fixed.
-        </p>
-      </details>
+      {Object.keys(result.space).length > 0 && (
+        <details>
+          <summary>Search ranges</summary>
+          <ul>
+            {Object.entries(result.space).map(([key, values]) => (
+              <li key={key}>
+                {parameterLabels[key] || key}: {values.join(", ")}
+              </li>
+            ))}
+          </ul>
+          <p className="subtle">
+            Your current settings are always included as trial 1. Broad
+            combinations use the same random seed. The data, horizon, costs and
+            validation split stay fixed. Refinement changes numeric settings
+            around validation leaders in smaller steps.
+          </p>
+        </details>
+      )}
+      {result.refinement && (
+        <details>
+          <summary>Refinement steps</summary>
+          <p className="subtle">{result.refinement.note}</p>
+          <p>
+            {result.refinement.broad_trials} initial trials ·{" "}
+            {result.config.trials - result.refinement.broad_trials} refinement
+            trials.
+          </p>
+          <ul>
+            {Object.entries(result.refinement.steps).map(([key, range]) => (
+              <li key={key}>
+                {parameterLabels[key] || key}: step {range.step}, bounded{" "}
+                {range.minimum} to {range.maximum}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <p className="subtle">{result.warnings.join(" ")}</p>
       {result.error && <p className="negative">{result.error}</p>}
     </div>

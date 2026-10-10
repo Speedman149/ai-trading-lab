@@ -64,3 +64,12 @@ A final development-server run exposed a pre-hydration date-edit race: the brows
 The hydration correction also passed all seven research checks against the development server. Completed and reopened results scroll to their saved parameter panel; applying a saved configuration returns to the form.
 
 After adding result navigation, the final production build, lint, TypeScript, Prettier and all four focused search/retrain/hydration browser checks passed.
+
+
+## Research v7: precise search and low-return diagnosis
+
+Final checks: 89 backend tests, Ruff lint/format, production frontend build, TypeScript, ESLint, Prettier and 15 production Playwright tests passed. Search regressions cover all three modes, validation-only frozen refinement centers, bounded unique neighbors, and unchanged ranking when final-test prices are altered. Hand-calculated paired-gate coverage confirms a 0.24% forecast only trades when both the return hurdle and probability checks pass, with actual 0.1% per-side commissions still charged. Browser coverage includes fractional restored parameters reaching the backend, winning-setting recovery, error recovery and mobile layout.
+
+A predefined 32-trial local search used the exact saved AAPL Alpaca dataset/actions snapshot from the previous 4.9568% validation run. Trial 1 reproduced 4.9568% exactly. The selected trial 5 changed only the extra return hurdle from 5 to 7.5 bps: validation net 9.8000% versus buy-and-hold 8.3758%, drawdown 2.4086%, Sharpe 1.7203, seven completed trades and $186.21 modeled costs. Only one of three folds was profitable. It still failed the predictive-MAE baseline check. The selected final frozen model used two return trees and one direction tree; no final-test forecast met both entry gates, giving 0% versus buy-and-hold 18.7950%. No candidate was promoted. These previously inspected dates are exploratory, not a fresh independent test.
+
+Saved search 005698b46ac4487ba2a2f615 and model f0028d0a7935a4b70f70901a remain local ignored artifacts. The real saved report was checked on desktop and at 390px width, with no page errors or horizontal page overflow. Restoring its fractional 7.5 bps hurdle passes native form validation and preserves the 10 bps commission assumption. The source comparison is not rewritten.

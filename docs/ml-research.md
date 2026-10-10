@@ -47,7 +47,13 @@ Seeing a holdout consumes it for human research. Rerunning many parameter choice
 
 ## Automatic parameter search
 
-Select XGBoost, choose a trial count (2–48, default 12), and click **Find best parameters**. Choose validation Sharpe (default) or validation net return as the ranking metric. The search always includes your current settings as trial 1, then samples unique combinations reproducibly with the research random seed.
+Select XGBoost, choose a search method and trial budget (2–48; the website defaults to 32), then click **Find best parameters**. Choose validation Sharpe (default) or validation net return. Trial 1 always contains your current settings.
+
+- **Broad then refine** (website default): spend half the budget on seeded broad combinations, freeze the two highest-ranked successful broad validation candidates, then alternate nearby changes around those centers. Ranking uses the same promotion/risk/metric policy throughout. If only one broad trial succeeds, refine that center; if all fail, try neighbors of the submitted settings.
+- **Refine current settings**: evaluate the submitted configuration, then nearby numeric choices with the same feature set and entry rule. **Refine winning settings** restores a saved winner's complete data/cost/model configuration and prepares this mode; click Find best parameters to start it.
+- **Broad random search**: use the original seeded sampling across feature sets, rules and numeric choices.
+
+Refinement starts with ±0.01 entry probability, ±2.5 bps extra hurdle, ±0.01 learning rate, ±1 depth/child-weight/L2, ±0.05 row/feature fractions and ±40 maximum trees. Parameters are bounded by the existing request limits. Try single-setting neighbors and joint probability/hurdle pairs at each radius, increasing the radius only after that neighborhood. Probability-only policies skip the unused hurdle. Deduplication treats ignored hurdles as equivalent. Every trial records its phase and originating broad trial. The report saves the steps and bounds; old random-search reports remain readable. Short budgets may only cover the first settings in this order; this is not an exhaustive or Bayesian optimizer.
 
 | Parameter | Sampled values |
 | --- | --- |
@@ -63,7 +69,7 @@ Select XGBoost, choose a trial count (2–48, default 12), and click **Find best
 | Minimum child weight | 1, 5, 10 |
 | L2 regularization | 1, 5, 10 |
 
-The asset, provider, date range, forecast horizon, folds, final-test fraction, random seed and execution costs remain fixed. Each search downloads/validates one data snapshot and reuses it across trials. Every trial uses the same chronological purging, separate training/early-stopping/calibration blocks, causal features and broker simulation as manual training. This is a strategy-aware random search rather than an accuracy-only classifier grid search.
+The asset, provider, date range, forecast horizon, folds, final-test fraction, random seed and execution costs remain fixed. Each search downloads/validates one data snapshot and reuses it across trials. Every trial uses the same chronological purging, separate training/early-stopping/calibration blocks, causal features and broker simulation as manual training. These are strategy-aware searches; predictive accuracy alone does not choose the winner.
 
 Ranking is fixed before evaluation: candidates passing all promotion checks first, then candidates within the 20% drawdown and 20x turnover limits, then the chosen validation metric. Ties use the other trading metric, smaller drawdown, lower turnover, lower MAE and earlier trial. Undefined Sharpe ranks below all defined values. Failed trials remain visible with an error and no rank. The leaderboard includes returns, Sharpe, drawdown, turnover, trading costs, prediction error, directional accuracy, baseline-relative return and individual fold returns.
 
@@ -71,7 +77,7 @@ Selection is persisted **before** final-test evaluation. Only the selected winne
 
 "Best found" means best under this ranking among the sampled choices, not a proven optimum. Searching many combinations can overfit validation. Previously viewed holdouts and repeated searches of the same dates do not become independent again. A genuinely later period is needed for another independent assessment. This separation follows [scikit-learn's model-selection guidance](https://scikit-learn.org/stable/modules/cross_validation.html).
 
-API: POST /api/research/searches accepts {"research": <ResearchRequest>, "trials": 12, "objective": "sharpe"} and returns the usual background job with kind="search" and search_id. Poll GET /api/research/jobs/{id}; after completion result_id identifies the winner. GET /api/research/searches lists saved runs, and GET /api/research/searches/{search_id} returns the leaderboard and selection record. Q-learning parameter search is not included in this milestone.
+API: POST /api/research/searches accepts {"research": <ResearchRequest>, "trials": 32, "objective": "sharpe", "mode": "coarse_to_fine"}. API clients omitting mode retain the original random search and default 12-trial budget. The endpoint returns the usual background job with kind="search" and search_id. Poll GET /api/research/jobs/{id}; after completion result_id identifies the winner. GET /api/research/searches lists saved runs, and GET /api/research/searches/{search_id} returns the leaderboard and selection record. Q-learning parameter search is not included in this milestone.
 
 ## Reinforcement learning
 
@@ -130,3 +136,16 @@ Model files record their feature names so older trained models remain readable. 
 Acceptance policy v2 uses the return MAE baseline for joint entry and the Brier baseline for probability-only entry, since the latter never uses the regression forecast to trade. Economic, risk and regime gates remain required. Earlier saved versions retain their original evaluated acceptance policy.
 
 The final service tag is research-v6.1 to invalidate development artifacts created before the strategy-specific acceptance policy was finalized. Old reports remain readable with their saved policies.
+
+
+## Research v7: diagnose low returns before increasing the search
+
+A reported net return covers the displayed evaluation dates. It is not an annual or monthly rate. Compare the benchmark on those same dates and costs, plus exposure, drawdown, trade count and performance in every fold. The report now shows this window explicitly, gross return on the same fills, costs, final tree-fitting/early-stopping/calibration sample counts, and actual trees in each fold. Gross return keeps the actual executed trades and sizing; it does not simulate a lower-cost policy, whose entry hurdle and trades could differ.
+
+The saved AAPL comparison before refinement has 4.9568% validation net return from 2023-08-15 to 2024-06-10 versus buy-and-hold's 8.3758%. The AI makes eight completed trades; only one of three folds has a positive return. Its drawdown is 2.5933% versus 15.0805% for buy-and-hold. Gross return on the same fills is 7.0608%, with $210.40 modeled costs on $10,000. The final frozen model uses two return trees and one direction tree, and stays in cash for the viewed final test. These facts do not establish a reliable forecasting advantage. Refinement of these dates is exploratory because the validation scores and final test have already been inspected.
+
+Early stopping deliberately selects fewer trees when additional trees fail to improve the internal score. A high maximum does not force a complex model, and a one-tree result is not a failed training job. The 60/20/20 split deliberately reserves later history for tree-count selection and probability calibration. No fitted component sees the final held-out labels. See the [official XGBoost estimator guidance](https://xgboost.readthedocs.io/en/stable/python/sklearn_estimator.html).
+
+The default 10 bps per-side commission is a simulation assumption, not a quote from Alpaca. Alpaca describes commission-free trading for qualifying self-directed individual API brokerage accounts, with possible regulatory fees; account plans and execution arrangements matter. See [Alpaca disclosures](https://alpaca.markets/disclosures) and [regulatory fees](https://docs.alpaca.markets/us/docs/regulatory-fees). Match modeled assumptions to the intended account and observed execution costs in a separate documented experiment; do not silently lower costs to improve a score. This engine has configurable generic per-side bps/fixed fees, not a dated Alpaca regulatory-fee schedule.
+
+More precise optimization can fit the validation period more closely without producing a useful future strategy. Prespecify each experiment and keep genuinely later data for a fresh assessment; changing settings after viewing the final test does not restore its independence. This follows [scikit-learn's explanation of model-selection bias](https://scikit-learn.org/stable/auto_examples/model_selection/plot_nested_cross_validation_iris.html). Additional market context, broader asset/history coverage, and longer forecast horizons are separate research hypotheses, not guarantees of improved returns. Forecast horizon remains fixed within a search so candidates share exactly the same labels and evaluation boundaries.

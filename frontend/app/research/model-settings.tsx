@@ -43,6 +43,9 @@ export default function ModelSettings({
     regression_trees?: number;
     direction_trees?: number | null;
     best_iteration?: number;
+    core_rows?: number;
+    early_stopping_rows?: number;
+    calibration_rows?: number;
   };
   search?: { id: string; selected_trial?: number } | null;
   retraining?: Retraining | null;
@@ -121,6 +124,16 @@ export default function ModelSettings({
         this model. Early stopping can use fewer trees than the configured
         maximum.
       </p>
+      {config.algorithm === "xgboost" && training.core_rows != null && (
+        <p className="subtle" id="training-sample-help">
+          Final-model training uses {training.core_rows} rows to fit trees,{" "}
+          {training.early_stopping_rows} later rows to choose the tree count,
+          and {training.calibration_rows} separate rows to calibrate
+          probabilities. A one- or two-tree model means more trees did not
+          improve its internal validation score. Raising the maximum alone may
+          leave its predictions unchanged.
+        </p>
+      )}
       <div className="button-row">
         <button type="button" disabled={running} onClick={onApply}>
           Use this model's settings

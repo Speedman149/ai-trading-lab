@@ -225,3 +225,49 @@ def test_probability_policy_acceptance_uses_probability_baseline_not_unused_retu
     assert probability["criteria"][-1]["value"] == pytest.approx(-0.1)
     validation["prediction"]["brier_score"] = 0.3
     assert not service.acceptance(validation, "xgboost", None, "probability_only")["eligible"]
+
+
+def test_fine_entry_threshold_pairs_and_real_costs_hand_calculated():
+    config = request(min_edge_bps=5, probability_threshold=0.55)
+    config = config.model_copy(
+        update={
+            "backtest": config.backtest.model_copy(
+                update={
+                    "initial_cash": 1000,
+                    "allocation": 0.5,
+                    "cash_reserve": 0,
+                    "commission_bps": 10,
+                    "spread_bps": 0,
+                    "slippage_bps": 0,
+                    "fixed_fee": 0,
+                    "max_participation": 1,
+                }
+            )
+        }
+    )
+    frame = synthetic(config.backtest).iloc[:3].copy()
+    for column in ("open", "high", "low", "close"):
+        frame[column] = [10.0, 10.0, 12.0]
+    frame["volume"] = 1000000
+    rows = frame.iloc[:2]
+    predicted, probability = np.array([0.0024, -0.01]), np.array([0.545, 0.2])
+
+    def simulate(candidate):
+        return run_engine(
+            frame, candidate.backtest, PredictionPolicy(rows, predicted, probability, candidate)
+        )
+
+    # Round-trip commission is 20 bps. 5 extra bps requires >0.25%,
+    # while 2.5 extra bps requires >0.225%. The forecast is 0.24%.
+    assert simulate(config)["metrics"]["fills"] == 0
+    assert simulate(config.model_copy(update={"min_edge_bps": 2.5}))["metrics"]["fills"] == 0
+    assert simulate(config.model_copy(update={"probability_threshold": 0.54}))["metrics"]["fills"] == 0
+    fine = config.model_copy(update={"min_edge_bps": 2.5, "probability_threshold": 0.54})
+    traded = simulate(fine)
+    # Both gates now pass. Buy $500 inclusive of 0.1% commission, then sell
+    # at $12 paying the same 0.1%. Refinement must never erase broker costs.
+    quantity = 500 / 10.01
+    expected = 500 + quantity * 12 * 0.999
+    assert traded["metrics"]["final_cash"] == pytest.approx(expected)
+    assert traded["metrics"]["transaction_costs"] == pytest.approx(quantity * (10 + 12) * 0.001)
+    assert traded["metrics"]["closed_trades"] == 1

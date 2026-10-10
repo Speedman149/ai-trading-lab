@@ -107,6 +107,7 @@ class SearchRequest(BaseModel):
     research: ResearchRequest
     trials: int = Field(12, ge=2, le=48)
     objective: Literal["sharpe", "net_return"] = "sharpe"
+    mode: Literal["random", "coarse_to_fine", "local"] = "random"
 
     @model_validator(mode="after")
     def supervised(self):
@@ -122,6 +123,7 @@ class SearchResult(BaseModel):
     config: SearchRequest
     space: dict[str, list[int | float | str]]
     selection_policy: str
+    refinement: dict | None = None
     code_version: str
     provenance: DatasetProvenance
     validation_start: str
