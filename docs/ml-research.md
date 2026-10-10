@@ -11,7 +11,7 @@ The AI Research page is at http://localhost:3000/research. It trains candidates 
 | Maximum trees | Upper limit per XGBoost model; early stopping may select fewer. |
 | Learning rate | Size of each added tree's contribution to the model, not retraining frequency. |
 | Extra return hurdle | Predicted return required above modeled round-trip costs. 5 basis points equals 0.05%. |
-| Entry probability | Minimum calibrated estimate of a positive economic return. 0.55 means 55%; the return hurdle must also pass. |
+| Entry probability | Minimum calibrated estimate of a positive economic return. 0.55 means 55%; joint entry also requires the return hurdle. |
 | Walk-forward folds | Number of later evaluation blocks, each tested by a fresh model trained on preceding data. |
 | Random seed | Controls reproducible randomness. The numeric value does not indicate quality. |
 | Final test fraction | Share of the newest usable labeled history reserved for final testing. 0.20 means 20%. |
@@ -33,7 +33,7 @@ The first 50% of labeled rows initializes expanding training. The following rows
 
 XGBoost return regression and binary direction classification use CPU histogram trees with a fixed seed and one training thread. Each training window is split chronologically into approximately 60% fitting, 20% early stopping, and 20% sigmoid probability calibration. Labels crossing either internal boundary are purged too. The calibration model sees disjoint later data. If fitting/calibration has only one direction class, the fallback and its limitation are recorded.
 
-Entry requires predicted economic return above modeled round-trip commission, spread, slippage, approximate fixed fees and the additional return hurdle, plus the configured up-probability threshold. Holding uses a zero-return exit boundary and the complementary probability threshold. The broker still applies actual modeled costs and affordability/volume caps. There is no leverage or short selling.
+The default joint entry rule requires predicted economic return above modeled round-trip commission, spread, slippage, approximate fixed fees and the additional return hurdle, plus the configured up-probability threshold. Holding uses a zero-return exit boundary and the complementary probability threshold. The broker still applies actual modeled costs and affordability/volume caps. The optional probability-only rule holds long at or above its entry threshold and cash below it, ignoring the regression hurdle while still paying modeled trading costs. There is no leverage or short selling.
 
 ## Evaluation
 
@@ -55,7 +55,13 @@ Select XGBoost, choose a trial count (2–48, default 12), and click **Find best
 | Tree depth | 2, 3, 4, 5 |
 | Learning rate | 0.02, 0.05, 0.10, 0.20 |
 | Extra return hurdle (bps) | 0, 5, 10, 20 |
-| Entry probability | 0.50, 0.55, 0.60, 0.65 |
+| Entry probability | 0.50, 0.52, 0.55, 0.60 |
+| Feature set | Basic, expanded technical |
+| Entry rule | Return + probability, probability only |
+| Training row fraction | 0.8, 1.0 |
+| Feature fraction per tree | 0.8, 1.0 |
+| Minimum child weight | 1, 5, 10 |
+| L2 regularization | 1, 5, 10 |
 
 The asset, provider, date range, forecast horizon, folds, final-test fraction, random seed and execution costs remain fixed. Each search downloads/validates one data snapshot and reuses it across trials. Every trial uses the same chronological purging, separate training/early-stopping/calibration blocks, causal features and broker simulation as manual training. This is a strategy-aware random search rather than an accuracy-only classifier grid search.
 
@@ -96,7 +102,7 @@ Promotion is an explicit research-registry action. Fixed acceptance criteria use
 - Turnover at most 20 times initial capital.
 - At least two regimes with 20 intervals.
 - No sufficiently sampled regime loses more than 10%.
-- XGBoost MAE beats both constant forecast baselines.
+- Joint XGBoost MAE beats both constant forecast baselines; probability-only Brier score beats the constant probability baseline.
 - For a retrained/reference model: at least 40 forward validation samples strictly after that reference's last training information; candidate return improves and drawdown is no worse.
 
 Reference comparisons use the saved model's own decision thresholds on identical dates and broker settings. If an active model exists, it is the reference and the candidate must explicitly be retrained against it. Promotion rejects stale evaluations if the active pointer changed. Former active versions remain on disk and can be restored. Synthetic/real providers and execution/model families have distinct registry keys. An active research version is a saved pointer, not a live trading deployment.
@@ -114,3 +120,13 @@ cd ~/projects/ai-trading-lab/backend
 ```
 
 Official research references: [XGBoost estimator and early stopping](https://xgboost.readthedocs.io/en/stable/python/python_api.html), [CPU-only installation](https://xgboost.readthedocs.io/en/stable/install.html), [chronological splits and gaps](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html), [probability calibration](https://scikit-learn.org/stable/modules/calibration.html), and [Gymnasium agent training](https://gymnasium.farama.org/introduction/train_agent/). Our purging uses actual label-availability timestamps rather than shuffled cross-validation.
+
+## Research v6: feature and strategy comparisons
+
+The parameter search additionally varies feature set (basic/technical), entry rule (return + probability/probability only), subsample and colsample_bytree (0.8/1), min_child_weight and reg_lambda (1/5/10). Probability thresholds are 0.50, 0.52, 0.55 and 0.60; the current configuration remains the first trial even outside these ranges. Probability-only trials set the ignored extra return hurdle to zero. Direct seeded sampling avoids materializing the expanded Cartesian product. Full validation and promotion ranking, data windows, prediction horizon and costs remain fixed.
+
+Model files record their feature names so older trained models remain readable. New activity and retraining explanations are optional fields; legacy reports are enriched on read without altering their saved results. Details and the audit of the supplied scripts are in [script-comparison.md](script-comparison.md).
+
+Acceptance policy v2 uses the return MAE baseline for joint entry and the Brier baseline for probability-only entry, since the latter never uses the regression forecast to trade. Economic, risk and regime gates remain required. Earlier saved versions retain their original evaluated acceptance policy.
+
+The final service tag is research-v6.1 to invalidate development artifacts created before the strategy-specific acceptance policy was finalized. Old reports remain readable with their saved policies.

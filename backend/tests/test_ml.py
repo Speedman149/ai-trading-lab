@@ -378,6 +378,11 @@ def test_retraining_preserves_snapshot_and_requires_new_forward_data(dataset, is
     before = snapshot.read_bytes()
     candidate = service.execute(req.model_copy(update={"parent_id": parent["id"], "refresh_data": True}))
     assert candidate["id"] != parent["id"]
+    assert candidate["validation"] == parent["validation"]
+    assert candidate["holdout"] == parent["holdout"]
+    assert candidate["retraining"]["parameters_preserved"]
+    assert candidate["retraining"]["same_validation_dates"]
+    assert candidate["retraining"]["same_holdout_dates"]
     assert refreshes == [False, True]
     assert candidate["promotion"]["incumbent_comparison"]["samples"] == 0
     assert not candidate["promotion"]["eligible"]

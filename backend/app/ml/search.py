@@ -1,6 +1,5 @@
 """Reproducible parameter selection using pre-test validation only."""
 
-import itertools
 import logging
 import math
 import random
@@ -15,7 +14,13 @@ SPACE = {
     "max_depth": [2, 3, 4, 5],
     "learning_rate": [0.02, 0.05, 0.1, 0.2],
     "min_edge_bps": [0, 5, 10, 20],
-    "probability_threshold": [0.5, 0.55, 0.6, 0.65],
+    "probability_threshold": [0.5, 0.52, 0.55, 0.6],
+    "feature_set": ["basic", "technical"],
+    "entry_rule": ["return_and_probability", "probability_only"],
+    "subsample": [0.8, 1.0],
+    "colsample_bytree": [0.8, 1.0],
+    "min_child_weight": [1, 5, 10],
+    "reg_lambda": [1, 5, 10],
 }
 POLICY = (
     "Rank candidates passing all promotion checks first, then candidates within "
@@ -29,13 +34,18 @@ POLICY = (
 def candidates(request):
     base = request.research
     current = {key: getattr(base, key) for key in SPACE}
-    options = [
-        dict(zip(SPACE, values))
-        for values in itertools.product(*SPACE.values())
-        if dict(zip(SPACE, values)) != current
-    ]
-    sampled = random.Random(base.seed).sample(options, request.trials - 1)
-    return [ResearchRequest.model_validate({**base.model_dump(), **params}) for params in [current, *sampled]]
+    # Sample directly instead of materializing the growing Cartesian product.
+    rng = random.Random(base.seed)
+    parameters, seen = [current], {tuple(current.values())}
+    while len(parameters) < request.trials:
+        sample = {key: rng.choice(values) for key, values in SPACE.items()}
+        if sample["entry_rule"] == "probability_only":
+            sample["min_edge_bps"] = 0  # The return hurdle does not enter this policy.
+        signature = tuple(sample.values())
+        if signature not in seen:
+            parameters.append(sample)
+            seen.add(signature)
+    return [ResearchRequest.model_validate({**base.model_dump(), **params}) for params in parameters]
 
 
 def ranking_key(trial, objective):
@@ -106,6 +116,7 @@ def execute(request, identifier, progress=lambda message: None):
                 "folds": [],
                 "promotion": None,
                 "risk_passed": False,
+                "activity": None,
             }
             try:
                 validated = service.validate(
@@ -122,6 +133,7 @@ def execute(request, identifier, progress=lambda message: None):
                         - max(value["metrics"]["net_return"] for value in validation["baselines"].values()),
                     },
                     prediction=validation["prediction"],
+                    activity=validation["activity"],
                     baselines={key: value["metrics"] for key, value in validation["baselines"].items()},
                     folds=[{"fold": fold["fold"], **fold["strategy"]} for fold in validated["walk_forward"]],
                     promotion=validated["promotion"],

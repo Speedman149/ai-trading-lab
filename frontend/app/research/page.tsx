@@ -5,6 +5,9 @@ import SearchResults, {
   type SearchSummary,
 } from "./search-results";
 import { useEffect, useState } from "react";
+import { defaults, settingsFromConfig, type ResearchConfig } from "./config";
+import ModelSettings, { type Retraining } from "./model-settings";
+import Activity, { type ActivityData } from "./activity";
 import {
   ResponsiveContainer,
   LineChart,
@@ -45,6 +48,7 @@ type Simulation = {
 };
 type Evaluation = {
   prediction: Prediction;
+  activity?: ActivityData | null;
   prediction_baselines: Record<string, Prediction>;
   strategy: Simulation;
   baselines: Record<string, Simulation>;
@@ -88,19 +92,19 @@ type Version = {
 };
 type Report = {
   id: string;
-  search?: { id: string } | null;
+  search?: { id: string; selected_trial?: number } | null;
   created_at: string;
-  config: {
-    algorithm: string;
-    horizon: number;
-    backtest: { asset: string; start: string; end: string; provider: string };
-  };
+  config: ResearchConfig;
+  retraining?: Retraining | null;
   provenance: { synthetic: boolean; rows: number; dataset_hash: string };
   training: {
     trained_through: string;
     holdout_start: string;
     rows: number;
     episode_rewards?: number[];
+    regression_trees?: number;
+    direction_trees?: number | null;
+    best_iteration?: number;
   };
   validation: Evaluation;
   holdout: Evaluation;
@@ -137,32 +141,7 @@ type Report = {
   warnings: string[];
   assumptions: string[];
 };
-const defaults = {
-  asset: "AAPL",
-  provider: "synthetic",
-  start: "2022-01-03",
-  end: "2025-01-01",
-  algorithm: "xgboost",
-  horizon: 1,
-  folds: 3,
-  holdout_fraction: 0.2,
-  n_estimators: 160,
-  max_depth: 3,
-  learning_rate: 0.05,
-  min_edge_bps: 5,
-  probability_threshold: 0.55,
-  seed: 42,
-  episodes: 20,
-  drawdown_penalty: 0,
-  initial_cash: 10000,
-  commission_bps: 10,
-  fixed_fee: 0,
-  spread_bps: 4,
-  slippage_bps: 2,
-  allocation: 0.9,
-  cash_reserve: 0.05,
-  max_participation: 0.01,
-};
+
 const settingHelp: Partial<Record<keyof typeof defaults, string>> = {
   horizon:
     "Daily bars ahead: 1 forecasts from the next market open to the following open. This does not force a one-day holding period.",
@@ -217,6 +196,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 export default function ResearchPage() {
   const [form, setForm] = useState(defaults);
+  const [ready, setReady] = useState(false);
   const [report, setReport] = useState<Report | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
@@ -232,6 +212,8 @@ export default function ResearchPage() {
     "sharpe" | "net_return"
   >("sharpe");
   const [searchReport, setSearchReport] = useState<SearchReport | null>(null);
+  const [showAllVersions, setShowAllVersions] = useState(false);
+  const [showAllSearches, setShowAllSearches] = useState(false);
   const [searchRuns, setSearchRuns] = useState<SearchSummary[]>([]);
   const [pendingAction, setPendingAction] = useState<{
     id: string;
@@ -249,6 +231,7 @@ export default function ResearchPage() {
   const reloadVersions = async () =>
     setVersions(await request<Version[]>("/api/research/versions"));
   useEffect(() => {
+    setReady(true);
     let mounted = true;
     Promise.all([
       request<Version[]>("/api/research/versions"),
@@ -295,6 +278,12 @@ export default function ResearchPage() {
           ]);
           if (!cancelled) {
             setReport(result);
+            setForm(settingsFromConfig(result.config));
+            setMessage(
+              found
+                ? "The winning settings are now loaded in the training form."
+                : "The form now shows the settings and dates used for this model.",
+            );
             setVersions(saved);
             setJob(next);
             setSearchRuns(searches);
@@ -321,8 +310,19 @@ export default function ResearchPage() {
       clearTimeout(timer);
     };
   }, [job]);
-  const change = (key: keyof typeof defaults, value: string | number) =>
-    setForm((old) => ({ ...old, [key]: value }));
+  useEffect(() => {
+    const target = report
+      ? "model-settings"
+      : searchReport
+        ? "search-results"
+        : null;
+    if (target)
+      document.getElementById(target)?.scrollIntoView({ block: "start" });
+  }, [report, searchReport]);
+  const change = (
+    key: keyof typeof defaults,
+    value: string | number | boolean,
+  ) => setForm((old) => ({ ...old, [key]: value }));
   const numeric = (
     key: keyof typeof defaults,
     label: string,
@@ -339,7 +339,7 @@ export default function ResearchPage() {
         min={min}
         max={max}
         step={step}
-        value={form[key]}
+        value={form[key] as string | number}
         aria-describedby={settingHelp[key] ? key + "-help" : undefined}
         onChange={(e) => change(key, Number(e.target.value))}
       />
@@ -364,6 +364,11 @@ export default function ResearchPage() {
       allocation,
       cash_reserve,
       max_participation,
+      fractional,
+      min_notional,
+      strategy,
+      fast,
+      slow,
       ...model
     } = form;
     return {
@@ -382,6 +387,11 @@ export default function ResearchPage() {
         allocation,
         cash_reserve,
         max_participation,
+        fractional,
+        min_notional,
+        strategy,
+        fast,
+        slow,
       },
     };
   }
@@ -449,27 +459,19 @@ export default function ResearchPage() {
     );
     if (!winner) return;
     const base = searchReport.config.research;
-    const selected: Record<string, unknown> = {
-      ...base,
-      ...base.backtest,
-      ...winner.parameters,
-    };
     setForm(
-      (old) =>
-        Object.fromEntries(
-          Object.entries(old).map(([key, value]) => [
-            key,
-            selected[key] ?? value,
-          ]),
-        ) as typeof defaults,
+      settingsFromConfig({ ...base, ...winner.parameters } as ResearchConfig),
     );
+    document
+      .getElementById("research-form")
+      ?.scrollIntoView({ block: "start" });
     setSearchTrials(searchReport.config.trials);
     setSearchObjective(searchReport.config.objective);
     setMessage(
       "Best-found settings and their data/cost configuration copied into the training form.",
     );
   }
-  async function load(id: string) {
+  async function load(id: string, apply = false) {
     setError("");
     setMessage("");
     try {
@@ -480,15 +482,26 @@ export default function ResearchPage() {
           )
         : null;
       setReport(saved);
+      if (apply) useSettings(saved.config);
       setSearchReport(found);
       setPeriod(found ? "validation" : "holdout");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load model");
     }
   }
+  function useSettings(config: ResearchConfig) {
+    setForm(settingsFromConfig(config));
+    document
+      .getElementById("research-form")
+      ?.scrollIntoView({ block: "start" });
+    setMessage(
+      "Saved model settings, history dates and execution costs copied into the training form.",
+    );
+  }
   async function action(
     id: string,
     operation: "retrain" | "promote" | "rollback",
+    mode: "latest" | "same_dates" = "latest",
   ) {
     setError("");
     setMessage("");
@@ -496,12 +509,18 @@ export default function ResearchPage() {
     try {
       const response = await request<Job>(
         "/api/research/versions/" + id + "/" + operation,
-        { method: "POST" },
+        {
+          method: "POST",
+          ...(operation === "retrain"
+            ? {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode }),
+              }
+            : {}),
+        },
       );
       if (operation === "retrain") {
         setJob(response);
-        setReport(null);
-        setSearchReport(null);
       } else {
         await reloadVersions();
         setMessage(
@@ -579,276 +598,397 @@ export default function ResearchPage() {
       <div className="grid">
         <div>
           <form className="panel" id="research-form" onSubmit={train}>
-            <h2>Train a candidate model</h2>
-            <label htmlFor="provider">Data source</label>
-            <select
-              id="provider"
-              value={form.provider}
-              onChange={(e) => change("provider", e.target.value)}
-            >
-              <option value="synthetic">Synthetic sample data</option>
-              <option value="alpaca">Alpaca historical data</option>
-            </select>
-            <label htmlFor="asset">Asset</label>
-            <select
-              id="asset"
-              value={form.asset}
-              onChange={(e) => change("asset", e.target.value)}
-            >
-              {["AAPL", "SPY", "BTC/USD", "ETH/USD"].map((asset) => (
-                <option key={asset}>{asset}</option>
-              ))}
-            </select>
-            <div className="pair">
-              <div>
-                <label htmlFor="start">History start</label>
-                <input
-                  id="start"
-                  type="date"
-                  required
-                  value={form.start}
-                  onChange={(e) => change("start", e.target.value)}
-                />
-              </div>
-              <div>
-                <label htmlFor="end">End (exclusive)</label>
-                <input
-                  id="end"
-                  type="date"
-                  required
-                  value={form.end}
-                  onChange={(e) => change("end", e.target.value)}
-                />
-              </div>
-            </div>
-            <p className="subtle">
-              Use at least 2 years for stocks. The final{" "}
-              {percent(form.holdout_fraction)} is reserved for the held-out
-              test.
-            </p>
-            <label htmlFor="algorithm">Model</label>
-            <select
-              id="algorithm"
-              value={form.algorithm}
-              onChange={(e) =>
-                setForm((old) => ({
-                  ...old,
-                  algorithm: e.target.value,
-                  horizon: e.target.value === "q_learning" ? 1 : old.horizon,
-                }))
-              }
-            >
-              <option value="xgboost">XGBoost · Return + direction</option>
-              <option value="q_learning">Q-learning · Experimental RL</option>
-            </select>
-            {form.algorithm === "xgboost" ? (
-              <>
-                <div className="pair">
-                  {numeric("horizon", "Forecast horizon (bars)", 1, 5)}
-                  {numeric("max_depth", "Tree depth", 1, 6)}
-                  {numeric("n_estimators", "Maximum trees", 20, 600)}
-                  {numeric("learning_rate", "Learning rate", 0.01, 0.3, 0.01)}
+            <fieldset className="research-fields" disabled={!ready || running}>
+              <h2>Train a candidate model</h2>
+              <label htmlFor="provider">Data source</label>
+              <select
+                id="provider"
+                value={form.provider}
+                onChange={(e) => change("provider", e.target.value)}
+              >
+                <option value="synthetic">Synthetic sample data</option>
+                <option value="alpaca">Alpaca historical data</option>
+              </select>
+              <label htmlFor="asset">Asset</label>
+              <select
+                id="asset"
+                value={form.asset}
+                onChange={(e) => change("asset", e.target.value)}
+              >
+                {["AAPL", "SPY", "BTC/USD", "ETH/USD"].map((asset) => (
+                  <option key={asset}>{asset}</option>
+                ))}
+              </select>
+              <div className="pair">
+                <div>
+                  <label htmlFor="start">History start</label>
+                  <input
+                    id="start"
+                    type="date"
+                    required
+                    value={form.start}
+                    onChange={(e) => change("start", e.target.value)}
+                  />
                 </div>
-                <div className="pair">
-                  {numeric("min_edge_bps", "Extra return hurdle (bps)", 0, 200)}
+                <div>
+                  <label htmlFor="end">End (exclusive)</label>
+                  <input
+                    id="end"
+                    type="date"
+                    required
+                    value={form.end}
+                    onChange={(e) => change("end", e.target.value)}
+                  />
+                </div>
+              </div>
+              <p className="subtle">
+                Use at least 2 years for stocks. The final{" "}
+                {percent(form.holdout_fraction)} is reserved for the held-out
+                test.
+              </p>
+              <label htmlFor="algorithm">Model</label>
+              <select
+                id="algorithm"
+                value={form.algorithm}
+                onChange={(e) =>
+                  setForm((old) => ({
+                    ...old,
+                    algorithm: e.target.value,
+                    horizon: e.target.value === "q_learning" ? 1 : old.horizon,
+                  }))
+                }
+              >
+                <option value="xgboost">XGBoost · Return + direction</option>
+                <option value="q_learning">Q-learning · Experimental RL</option>
+              </select>
+              {form.algorithm === "xgboost" ? (
+                <>
+                  <label htmlFor="feature_set">Features to learn from</label>
+                  <select
+                    id="feature_set"
+                    value={form.feature_set}
+                    onChange={(e) => change("feature_set", e.target.value)}
+                  >
+                    <option value="basic">
+                      Basic: returns, trend, volatility, RSI
+                    </option>
+                    <option value="technical">
+                      Expanded: also Bollinger bands, PPO, ATR, 50-day trend
+                    </option>
+                  </select>
+                  <label htmlFor="entry_rule">Trading decision rule</label>
+                  <select
+                    id="entry_rule"
+                    value={form.entry_rule}
+                    onChange={(e) => change("entry_rule", e.target.value)}
+                  >
+                    <option value="return_and_probability">
+                      Return forecast + direction probability
+                    </option>
+                    <option value="probability_only">
+                      Direction probability only
+                    </option>
+                  </select>
+                  <div className="pair">
+                    {numeric("horizon", "Forecast horizon (bars)", 1, 5)}
+                    {numeric("max_depth", "Tree depth", 1, 6)}
+                    {numeric("n_estimators", "Maximum trees", 20, 600)}
+                    {numeric("learning_rate", "Learning rate", 0.01, 0.3, 0.01)}
+                  </div>
+                  <div className="pair">
+                    {numeric(
+                      "min_edge_bps",
+                      "Extra return hurdle (bps)",
+                      0,
+                      200,
+                    )}
+                    {numeric(
+                      "probability_threshold",
+                      "Entry probability",
+                      0.5,
+                      0.9,
+                      0.01,
+                    )}
+                  </div>
+                  <p className="subtle">
+                    {form.entry_rule === "probability_only"
+                      ? "Hold while the calibrated up-probability meets the entry threshold; otherwise hold cash. The return hurdle is ignored. Trading costs still apply."
+                      : "Enter only when the forecast exceeds modeled costs and the probability threshold."}
+                  </p>
+                  <details>
+                    <summary>XGBoost sampling & regularization</summary>
+                    <div className="pair">
+                      {numeric(
+                        "subsample",
+                        "Training row fraction",
+                        0.5,
+                        1,
+                        0.1,
+                      )}
+                      {numeric(
+                        "colsample_bytree",
+                        "Feature fraction per tree",
+                        0.5,
+                        1,
+                        0.1,
+                      )}
+                      {numeric(
+                        "min_child_weight",
+                        "Minimum child weight",
+                        1,
+                        20,
+                      )}
+                      {numeric("reg_lambda", "L2 regularization", 0, 50)}
+                    </div>
+                    <p className="subtle">
+                      Sampling uses a subset of training rows or features for
+                      each tree. Higher child weight and regularization restrict
+                      fitting; stronger settings do not automatically improve
+                      performance.
+                    </p>
+                  </details>
+                </>
+              ) : (
+                <>
+                  {numeric("episodes", "Training episodes", 2, 60)}
                   {numeric(
-                    "probability_threshold",
-                    "Entry probability",
-                    0.5,
-                    0.9,
-                    0.01,
+                    "drawdown_penalty",
+                    "Drawdown increase penalty",
+                    0,
+                    2,
+                    0.1,
+                  )}
+                  <p className="subtle">
+                    Actions: cash or long. Reward: net log equity change,
+                    including actual broker costs. A penalty of 0 uses net
+                    equity alone. Each fold trains a fresh policy.
+                  </p>
+                </>
+              )}
+              <div className="pair">
+                {numeric("folds", "Walk-forward folds", 2, 5)}
+                {numeric("seed", "Random seed", 0, 2147483647)}
+                {numeric(
+                  "holdout_fraction",
+                  "Final test fraction",
+                  0.15,
+                  0.3,
+                  0.05,
+                )}
+                {numeric(
+                  "initial_cash",
+                  "Initial capital ($)",
+                  100,
+                  1000000000,
+                  100,
+                )}
+              </div>
+              <details>
+                <summary>Execution costs & position sizing</summary>
+                <div className="pair">
+                  {numeric("commission_bps", "Commission (bps)", 0, 500)}
+                  {numeric("fixed_fee", "Fixed fee ($)", 0, 100, 0.01)}
+                  {numeric("spread_bps", "Full spread (bps)", 0, 500)}
+                  {numeric("slippage_bps", "Slippage (bps)", 0, 500)}
+                  {numeric("min_notional", "Minimum order ($)", 0, 1000000, 1)}
+                  {numeric("allocation", "Entry allocation", 0.01, 1, 0.01)}
+                  {numeric("cash_reserve", "Cash reserve", 0, 0.99, 0.01)}
+                  {numeric(
+                    "max_participation",
+                    "Prior-volume fraction",
+                    0.001,
+                    1,
+                    0.001,
                   )}
                 </div>
-                <p className="subtle">
-                  Enter only when the forecast exceeds modeled costs and the
-                  probability threshold.
-                </p>
-              </>
-            ) : (
-              <>
-                {numeric("episodes", "Training episodes", 2, 60)}
-                {numeric(
-                  "drawdown_penalty",
-                  "Drawdown increase penalty",
-                  0,
-                  2,
-                  0.1,
-                )}
-                <p className="subtle">
-                  Actions: cash or long. Reward: net log equity change,
-                  including actual broker costs. A penalty of 0 uses net equity
-                  alone. Each fold trains a fresh policy.
-                </p>
-              </>
-            )}
-            <div className="pair">
-              {numeric("folds", "Walk-forward folds", 2, 5)}
-              {numeric("seed", "Random seed", 0, 2147483647)}
-              {numeric(
-                "holdout_fraction",
-                "Final test fraction",
-                0.15,
-                0.3,
-                0.05,
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={form.fractional}
+                    onChange={(e) => change("fractional", e.target.checked)}
+                  />{" "}
+                  Allow fractional shares
+                </label>
+              </details>
+              <button className="run" disabled={running} aria-busy={training}>
+                {training
+                  ? searching
+                    ? "Parameter search in progress…"
+                    : "Training in progress…"
+                  : pendingAction
+                    ? "Model update in progress…"
+                    : "Train & Evaluate"}
+              </button>
+              {form.algorithm === "xgboost" && (
+                <fieldset className="search-settings" disabled={running}>
+                  <legend>Automatic parameter search</legend>
+                  <label htmlFor="search-trials">Parameter trials (2–48)</label>
+                  <input
+                    id="search-trials"
+                    type="number"
+                    min={2}
+                    max={48}
+                    step={1}
+                    required
+                    value={searchTrials}
+                    onChange={(e) => setSearchTrials(Number(e.target.value))}
+                  />
+                  <label htmlFor="search-objective">Rank candidates by</label>
+                  <select
+                    id="search-objective"
+                    value={searchObjective}
+                    onChange={(e) =>
+                      setSearchObjective(
+                        e.target.value as "sharpe" | "net_return",
+                      )
+                    }
+                  >
+                    <option value="sharpe">Validation Sharpe</option>
+                    <option value="net_return">Validation net return</option>
+                  </select>
+                  <p className="subtle" id="search-help">
+                    Compare feature sets, entry rules, tree settings, sampling,
+                    regularization, return hurdles and entry probabilities.
+                    Passing validation checks rank first, then candidates within
+                    risk limits, then your chosen metric. Only the winner is
+                    evaluated on the final test.
+                  </p>
+                  <button
+                    type="button"
+                    className="run secondary"
+                    disabled={running}
+                    aria-busy={searching}
+                    aria-describedby="search-help"
+                    onClick={findParameters}
+                  >
+                    {searching
+                      ? "Searching parameters…"
+                      : "Find best parameters"}
+                  </button>
+                </fieldset>
               )}
-              {numeric(
-                "initial_cash",
-                "Initial capital ($)",
-                100,
-                1000000000,
-                100,
-              )}
-            </div>
-            <details>
-              <summary>Execution costs & position sizing</summary>
-              <div className="pair">
-                {numeric("commission_bps", "Commission (bps)", 0, 500)}
-                {numeric("fixed_fee", "Fixed fee ($)", 0, 100, 0.01)}
-                {numeric("spread_bps", "Full spread (bps)", 0, 500)}
-                {numeric("slippage_bps", "Slippage (bps)", 0, 500)}
-                {numeric("allocation", "Entry allocation", 0.01, 1, 0.01)}
-                {numeric("cash_reserve", "Cash reserve", 0, 0.99, 0.01)}
-                {numeric(
-                  "max_participation",
-                  "Prior-volume fraction",
-                  0.001,
-                  1,
-                  0.001,
-                )}
-              </div>
-            </details>
-            <button className="run" disabled={running} aria-busy={training}>
-              {training
-                ? searching
-                  ? "Parameter search in progress…"
-                  : "Training in progress…"
-                : pendingAction
-                  ? "Model update in progress…"
-                  : "Train & Evaluate"}
-            </button>
-            {form.algorithm === "xgboost" && (
-              <fieldset className="search-settings" disabled={running}>
-                <legend>Automatic parameter search</legend>
-                <label htmlFor="search-trials">Parameter trials (2–48)</label>
-                <input
-                  id="search-trials"
-                  type="number"
-                  min={2}
-                  max={48}
-                  step={1}
-                  required
-                  value={searchTrials}
-                  onChange={(e) => setSearchTrials(Number(e.target.value))}
-                />
-                <label htmlFor="search-objective">Rank candidates by</label>
-                <select
-                  id="search-objective"
-                  value={searchObjective}
-                  onChange={(e) =>
-                    setSearchObjective(
-                      e.target.value as "sharpe" | "net_return",
-                    )
-                  }
-                >
-                  <option value="sharpe">Validation Sharpe</option>
-                  <option value="net_return">Validation net return</option>
-                </select>
-                <p className="subtle" id="search-help">
-                  Compare your current settings with other tree counts, depths,
-                  learning rates, return hurdles and entry probabilities.
-                  Passing validation checks rank first, then candidates within
-                  risk limits, then your chosen metric. Only the winner is
-                  evaluated on the final test.
-                </p>
-                <button
-                  type="button"
-                  className="run secondary"
-                  disabled={running}
-                  aria-busy={searching}
-                  aria-describedby="search-help"
-                  onClick={findParameters}
-                >
-                  {searching ? "Searching parameters…" : "Find best parameters"}
-                </button>
-              </fieldset>
-            )}
-            <p className="subtle">
-              Chronological splits · Purged labels · Next-open fills
-            </p>
+              <p className="subtle">
+                Chronological splits · Purged labels · Next-open fills
+              </p>
+            </fieldset>
           </form>
           <div className="panel charts saved-models">
             <h2>Saved model versions</h2>
             {versions.length === 0 && (
               <p>Your trained candidates will appear here.</p>
             )}
-            {versions.slice(0, 12).map((version) => (
-              <div className="version" key={version.id}>
-                <strong>
-                  {version.asset} ·{" "}
-                  {version.algorithm === "xgboost" ? "XGBoost" : "Q-learning"}
-                </strong>
-                <p>
-                  {version.provider} ·{" "}
-                  {version.created_at.slice(0, 16).replace("T", " ")}
-                  <br />
-                  Test return {percent(version.net_return)} ·{" "}
-                  {version.active ? "Active" : "Candidate"}
-                </p>
-                <div className="button-row">
-                  <button
-                    type="button"
-                    onClick={() => load(version.id)}
-                    disabled={running}
-                  >
-                    View results
-                  </button>
-                  {version.rollback_available && !version.active && (
+            {(showAllVersions ? versions : versions.slice(0, 12)).map(
+              (version) => (
+                <div
+                  className="version"
+                  key={version.id}
+                  data-version={version.id}
+                >
+                  <strong>
+                    {version.asset} ·{" "}
+                    {version.algorithm === "xgboost" ? "XGBoost" : "Q-learning"}
+                  </strong>
+                  <p>
+                    {version.provider} ·{" "}
+                    {version.created_at.slice(0, 16).replace("T", " ")}
+                    <br />
+                    Version {version.id.slice(0, 8)} · Test return{" "}
+                    {percent(version.net_return)} ·{" "}
+                    {version.active ? "Active" : "Candidate"}
+                  </p>
+                  <div className="button-row">
                     <button
                       type="button"
-                      onClick={() => action(version.id, "rollback")}
+                      onClick={() => load(version.id)}
                       disabled={running}
-                      aria-busy={
-                        pendingAction?.operation === "rollback" &&
-                        pendingAction.id === version.id
-                      }
                     >
-                      {pendingAction?.operation === "rollback" &&
-                      pendingAction.id === version.id
-                        ? "Restoring…"
-                        : "Restore version"}
+                      View results
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => load(version.id, true)}
+                      disabled={running}
+                    >
+                      Use settings
+                    </button>
+                    {version.rollback_available && !version.active && (
+                      <button
+                        type="button"
+                        onClick={() => action(version.id, "rollback")}
+                        disabled={running}
+                        aria-busy={
+                          pendingAction?.operation === "rollback" &&
+                          pendingAction.id === version.id
+                        }
+                      >
+                        {pendingAction?.operation === "rollback" &&
+                        pendingAction.id === version.id
+                          ? "Restoring…"
+                          : "Restore version"}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ),
+            )}
           </div>
+          {versions.length > 12 && (
+            <button
+              type="button"
+              onClick={() => setShowAllVersions(!showAllVersions)}
+            >
+              {showAllVersions
+                ? "Show fewer models"
+                : `Show all ${versions.length} models`}
+            </button>
+          )}
           <div className="panel charts saved-searches">
             <h2>Saved parameter searches</h2>
             {searchRuns.length === 0 && (
               <p>Your search history will appear here.</p>
             )}
-            {searchRuns.slice(0, 6).map((run) => (
-              <div className="version" key={run.id}>
-                <strong>
-                  {run.asset} ·{" "}
-                  {run.provider === "synthetic" ? "SYNTHETIC" : "Alpaca"}
-                </strong>
-                <p>
-                  {run.trials} trials ·{" "}
-                  {run.objective === "sharpe" ? "Sharpe" : "Net return"} ·{" "}
-                  {run.status}
-                  <br />
-                  {run.created_at.slice(0, 16).replace("T", " ")}
-                </p>
-                <button
-                  type="button"
-                  disabled={running}
-                  onClick={() => loadSearch(run.id)}
-                >
-                  View search
-                </button>
-              </div>
-            ))}
+            {(showAllSearches ? searchRuns : searchRuns.slice(0, 6)).map(
+              (run) => (
+                <div className="version" key={run.id}>
+                  <strong>
+                    {run.asset} ·{" "}
+                    {run.provider === "synthetic" ? "SYNTHETIC" : "Alpaca"}
+                  </strong>
+                  <p>
+                    {run.trials} trials ·{" "}
+                    {run.objective === "sharpe" ? "Sharpe" : "Net return"} ·{" "}
+                    {run.status}
+                    <br />
+                    {run.created_at.slice(0, 16).replace("T", " ")}
+                  </p>
+                  {run.parameters && (
+                    <p className="best-parameters">
+                      Chosen: depth {run.parameters.max_depth},{" "}
+                      {run.parameters.n_estimators} trees, rate{" "}
+                      {run.parameters.learning_rate}, entry{" "}
+                      {percent(run.parameters.probability_threshold)}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={running}
+                    onClick={() => loadSearch(run.id)}
+                  >
+                    View search
+                  </button>
+                </div>
+              ),
+            )}
+            {searchRuns.length > 6 && (
+              <button
+                type="button"
+                onClick={() => setShowAllSearches(!showAllSearches)}
+              >
+                {showAllSearches
+                  ? "Show fewer searches"
+                  : `Show all ${searchRuns.length} searches`}
+              </button>
+            )}
           </div>
         </div>
         <section aria-live="polite">
@@ -876,6 +1016,23 @@ export default function ResearchPage() {
                 </p>
               </div>
             </div>
+          )}
+          {report && (
+            <ModelSettings
+              config={report.config}
+              id={report.id}
+              training={report.training}
+              search={report.search}
+              retraining={report.retraining}
+              validationReturn={
+                report.validation.strategy.metrics.net_return ?? 0
+              }
+              testReturn={report.holdout.strategy.metrics.net_return ?? 0}
+              running={running}
+              onApply={() => useSettings(report.config)}
+              onViewParent={(id) => load(id)}
+              onViewSearch={(id) => loadSearch(id)}
+            />
           )}
           {searchReport && (
             <SearchResults
@@ -969,6 +1126,7 @@ export default function ResearchPage() {
                   </div>
                 ))}
               </div>
+              {evaluation.activity && <Activity data={evaluation.activity} />}
               <div className="panel charts">
                 <h2>AI portfolio vs simple baselines</h2>
                 <div className="legend">
@@ -1313,7 +1471,14 @@ export default function ResearchPage() {
                   >
                     {pendingAction?.operation === "retrain"
                       ? "Submitting retraining…"
-                      : "Refresh data & retrain"}
+                      : "Retrain through today"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={running}
+                    onClick={() => action(report.id, "retrain", "same_dates")}
+                  >
+                    Re-run saved dates
                   </button>
                   <button
                     type="button"
@@ -1333,10 +1498,14 @@ export default function ResearchPage() {
                   {promotionReason}
                 </p>
                 <p className="subtle">
-                  Retraining uses newly completed daily bars, preserves this
-                  version and trains a separate candidate. Promotion uses fixed
-                  validation criteria. Previously active versions can be
-                  restored from the saved list.
+                  Both buttons use this model's saved parameters, rather than
+                  unsaved form edits. Re-run saved dates keeps{" "}
+                  {report.config.backtest.start} to {report.config.backtest.end}{" "}
+                  and uses cached history with the current code. Retrain through
+                  today refreshes history and extends the end date, which moves
+                  the validation and final-test windows. Both preserve this
+                  version; a changed period can produce a loss without any
+                  parameters changing.
                 </p>
               </div>
               {report.config.algorithm === "xgboost" && (

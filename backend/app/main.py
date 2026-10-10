@@ -92,8 +92,15 @@ def equity(identifier: str):
 
 
 # Model research is deliberately separate from conventional backtests.
-from app.ml import jobs, storage
-from app.ml.schemas import ResearchJob, ResearchRequest, ResearchResult, SearchRequest, SearchResult
+from app.ml import jobs, service, storage
+from app.ml.schemas import (
+    ResearchJob,
+    ResearchRequest,
+    ResearchResult,
+    RetrainRequest,
+    SearchRequest,
+    SearchResult,
+)
 
 jobs.initialize()
 
@@ -130,24 +137,25 @@ def model_versions():
 @app.get("/api/research/versions/{identifier}", response_model=ResearchResult)
 def model_result(identifier: str):
     try:
-        return storage.result(identifier)
+        return service.annotate_saved_result(storage.result(identifier))
     except FileNotFoundError as exc:
         raise HTTPException(404, "Unknown model version") from exc
 
 
 @app.post("/api/research/versions/{identifier}/retrain", response_model=ResearchJob, status_code=202)
-def retrain_model(identifier: str):
+def retrain_model(identifier: str, options: RetrainRequest | None = None):
     from datetime import UTC, datetime, timedelta
 
     try:
         saved = storage.result(identifier)
         req = ResearchRequest.model_validate(saved["config"])
-        end = datetime.now(UTC).date()
+        latest = options is None or options.mode == "latest"
+        end = datetime.now(UTC).date() if latest else req.backtest.end
         start = max(req.backtest.start, end - timedelta(days=3650))
         req = req.model_copy(
             update={
                 "parent_id": identifier,
-                "refresh_data": True,
+                "refresh_data": latest,
                 "backtest": req.backtest.model_copy(update={"start": start, "end": end}),
             }
         )

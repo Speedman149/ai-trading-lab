@@ -47,9 +47,9 @@ def prediction_metrics(actual, predicted=None, probability=None):
     return result
 
 
-def distribution_reference(training):
+def distribution_reference(training, names=None):
     result = {}
-    for name in FEATURES:
+    for name in FEATURES if names is None else names:
         edges = np.unique(np.quantile(training[name], np.arange(0.1, 1, 0.1)))
         counts = np.bincount(np.digitize(training[name], edges), minlength=len(edges) + 1)
         result[name] = {"edges": edges.tolist(), "frequency": (counts / counts.sum()).tolist()}

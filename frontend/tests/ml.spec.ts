@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 test("XGBoost training shows backend evaluation, calibration and saved versions", async ({
   page,
@@ -13,6 +14,15 @@ test("XGBoost training shows backend evaluation, calibration and saved versions"
   await page.locator("#end").fill("2025-01-01");
   await page.locator("#folds").fill("2");
   await page.locator("#n_estimators").fill("30");
+  await page.locator("#feature_set").selectOption("technical");
+  await page.locator("#entry_rule").selectOption("probability_only");
+  await page
+    .getByText("XGBoost sampling & regularization", { exact: true })
+    .click();
+  await page.locator("#subsample").fill("0.8");
+  await page.locator("#colsample_bytree").fill("0.8");
+  await page.locator("#reg_lambda").fill("1");
+  await page.locator("#min_child_weight").fill("1");
   const submitted = page.waitForResponse(
     (r) =>
       r.url().endsWith("/api/research/jobs") && r.request().method() === "POST",
@@ -31,6 +41,33 @@ test("XGBoost training shows backend evaluation, calibration and saved versions"
   expect(report.config.algorithm).toBe("xgboost");
   expect(report.config.backtest.asset).toBe("BTC/USD");
   expect(report.provenance.synthetic).toBeTruthy();
+  expect(report.features).toHaveLength(17);
+  await expect(
+    page.getByRole("heading", {
+      name: "Parameters used for this model",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".model-settings")).toContainText(
+    "Expanded technical (17)",
+  );
+  await expect(
+    page.getByRole("heading", {
+      name: "What drove these results?",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("table", { name: "Entry signal diagnostics" }),
+  ).toContainText("not required in probability-only mode");
+  const downloadPromise = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "Download settings JSON", exact: true })
+    .click();
+  const download = await downloadPromise;
+  const exported = JSON.parse(await readFile((await download.path())!, "utf8"));
+  expect(exported.research).toEqual(report.config);
+  expect(exported.format).toBe("ai-trading-lab-settings-v1");
   const percent = (v: number) => (v * 100).toFixed(2) + "%";
   await expect(page.locator(".stat").first()).toContainText(
     percent(report.holdout.strategy.metrics.net_return),
@@ -84,6 +121,19 @@ test("XGBoost training shows backend evaluation, calibration and saved versions"
     .filter({ hasText: "BTC/USD · XGBoost" })
     .first();
   await saved.getByRole("button", { name: "View results" }).click();
+  await page.locator("#asset").selectOption("AAPL");
+  await page.locator("#max_depth").fill("6");
+  await page
+    .getByRole("button", { name: "Use this model's settings", exact: true })
+    .click();
+  await expect(page.locator("#asset")).toHaveValue("BTC/USD");
+  await expect(page.locator("#max_depth")).toHaveValue(
+    String(report.config.max_depth),
+  );
+  await expect(page.locator("#feature_set")).toHaveValue("technical");
+  await expect(page.locator("#entry_rule")).toHaveValue("probability_only");
+  await expect(page.locator("#end")).toHaveValue(report.config.backtest.end);
+  await expect(page.locator("#subsample")).toHaveValue("0.8");
   await expect(page.locator(".stat").first()).toContainText(
     percent(report.holdout.strategy.metrics.net_return),
   );

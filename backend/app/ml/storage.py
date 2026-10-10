@@ -130,8 +130,11 @@ def searches():
     saved = []
     for path in (folder() / "searches").glob("*.json"):
         data = json.loads(path.read_text())
+        selected = next((trial for trial in data["trials"] if trial["trial"] == data["selected_trial"]), None)
         saved.append(
             {
+                "parameters": selected["parameters"] if selected else None,
+                "metrics": selected["metrics"] if selected else None,
                 "id": data["id"],
                 "created_at": data["created_at"],
                 "status": data["status"],

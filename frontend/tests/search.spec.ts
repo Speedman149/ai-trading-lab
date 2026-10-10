@@ -38,6 +38,18 @@ test("parameter search ranks validation, tests one winner, applies settings and 
   expect(report.status).toBe("completed");
   expect(report.config.objective).toBe("net_return");
   expect(report.trials).toHaveLength(3);
+  const selectedParameters = report.trials.find(
+    (trial: { trial: number }) => trial.trial === report.selected_trial,
+  ).parameters;
+  for (const [key, value] of Object.entries(selectedParameters)) {
+    await expect(page.locator("#" + key)).toHaveValue(String(value));
+  }
+  await expect(
+    page.getByRole("heading", {
+      name: "Parameters used for this model",
+      exact: true,
+    }),
+  ).toBeVisible();
   expect(report.trials[0].trial).toBe(report.selected_trial);
   await expect(
     page.getByRole("heading", { name: "Best candidate found", exact: true }),
@@ -77,6 +89,8 @@ test("parameter search ranks validation, tests one winner, applies settings and 
     versions.find((version: { id: string }) => version.id === report.winner_id)
       .active,
   ).toBeFalsy();
+  await page.locator("#feature_set").selectOption("basic");
+  await page.locator("#entry_rule").selectOption("return_and_probability");
   await page.locator("#asset").selectOption("AAPL");
   await page.locator("#max_depth").fill("6");
   await page.locator("#initial_cash").fill("54321");

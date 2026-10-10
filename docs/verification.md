@@ -48,3 +48,19 @@ Supported stock actions are ordinary cash dividends and forward/reverse splits. 
 - Research page responds HTTP 200, with both development servers running locally.
 - Remaining warnings: existing Starlette/httpx TestClient deprecation and Gymnasium's informational warnings about unbounded observation-space limits. These checks pass; the Q agent discretizes finite observed features.
 - Generated datasets/models, API credentials and QA images are excluded from Git. Automatic scheduling, deep PPO, multi-asset research and ongoing paper/live trading are outside this milestone.
+
+## Parameter recovery, retraining explanations and expanded comparisons — 2026-10-10
+
+- Backend: **83 tests passed**, with hand-calculated new feature values, causal prefix invariance, deterministic sampled models and model reload, cost-bearing probability-only execution, activity counts/exposure, both retrain date modes, same-period reproduction, read-only legacy annotations, and strategy-specific predictive acceptance.
+- Ruff lint/format, Next production build, TypeScript, ESLint and Prettier passed.
+- Browser integration: **12 tests passed** on the production build, including all previous workflows plus JSON settings export, restore of complete model configuration, automatic winner-to-form propagation and identical saved-date rerun results.
+- Real-data verification: 24 validation-only AAPL trials on the exact cached 2022-01-03 to 2025-01-01 input snapshot used by the existing saved search. The selected expanded-technical configuration returned **4.9568%** on validation versus **8.3758%** for buy-and-hold; eight completed trades, 2.5933% maximum drawdown, 0.9271 Sharpe and $210.40 modeled costs. The frozen final model stayed in cash (0%) versus 18.7950% for buy-and-hold. It failed net-baseline and return-MAE acceptance checks. It was not promoted. These results verify the workflow and show no demonstrated profitable advantage.
+- Desktop/mobile screenshots of the selected real parameters, activity and legacy retrain comparison were inspected. The user's earlier 2026-10-10 retrain correctly restores its 240-tree maximum and Alpaca settings and explains that its history/test windows differ from the parent ending 2025-01-01. No horizontal mobile overflow or browser script errors.
+- Exact code identity advances to research-v6.1 after finalizing probability-only acceptance, avoiding reuse of earlier development artifacts with a different acceptance policy. Stored historical reports and input snapshots remain untouched.
+- Generated research files/screenshots remain local and ignored by Git. No live or paper order-placement functionality was enabled.
+
+A final development-server run exposed a pre-hydration date-edit race: the browser could accept a native input before React attached its handler, then restore the default start date. The form now stays disabled until hydration finishes. A delayed-script regression checks that the exact entered start/end reach the backend and receive the expected short-history error. This adds a twelfth browser test.
+
+The hydration correction also passed all seven research checks against the development server. Completed and reopened results scroll to their saved parameter panel; applying a saved configuration returns to the form.
+
+After adding result navigation, the final production build, lint, TypeScript, Prettier and all four focused search/retrain/hydration browser checks passed.

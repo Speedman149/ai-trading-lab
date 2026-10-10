@@ -1,10 +1,18 @@
 "use client";
+import { parameterLabels, settingValue } from "./config";
+import type { ActivityData } from "./activity";
 export type SearchParameters = {
   n_estimators: number;
   max_depth: number;
   learning_rate: number;
   min_edge_bps: number;
   probability_threshold: number;
+  feature_set?: string;
+  entry_rule?: string;
+  subsample?: number;
+  colsample_bytree?: number;
+  min_child_weight?: number;
+  reg_lambda?: number;
 };
 export type SearchTrial = {
   trial: number;
@@ -23,6 +31,8 @@ export type SearchTrial = {
     criteria: { name: string; passed: boolean }[];
   } | null;
   risk_passed: boolean;
+  activity?: ActivityData | null;
+  baselines?: Record<string, { net_return: number }>;
 };
 export type SearchReport = {
   id: string;
@@ -41,7 +51,7 @@ export type SearchReport = {
     trials: number;
     objective: "sharpe" | "net_return";
   };
-  space: Record<string, number[]>;
+  space: Record<string, (string | number)[]>;
   selection_policy: string;
   provenance: { synthetic: boolean };
   validation_start: string;
@@ -62,18 +72,12 @@ export type SearchSummary = {
   trials: number;
   objective: string;
   winner_id: string | null;
+  parameters?: SearchParameters | null;
 };
 const percent = (value: number | null | undefined) =>
   value == null ? "N/A" : (value * 100).toFixed(2) + "%";
 const decimal = (value: number | null | undefined, digits = 3) =>
   value == null ? "N/A" : value.toFixed(digits);
-const labels: Record<keyof SearchParameters, string> = {
-  n_estimators: "Maximum trees",
-  max_depth: "Tree depth",
-  learning_rate: "Learning rate",
-  min_edge_bps: "Extra return hurdle (bps)",
-  probability_threshold: "Entry probability",
-};
 export default function SearchResults({
   result,
   running,
@@ -87,7 +91,7 @@ export default function SearchResults({
     (trial) => trial.trial === result.selected_trial,
   );
   return (
-    <div className="panel charts search-results">
+    <div className="panel charts search-results" id="search-results">
       <h2>{winner ? "Best candidate found" : "Parameter search results"}</h2>
       <p>
         {result.config.research.backtest.asset} ·{" "}
@@ -106,12 +110,16 @@ export default function SearchResults({
       {winner && (
         <>
           <p className="best-parameters">
-            Trial {winner.trial}: depth {winner.parameters.max_depth} ·{" "}
-            {winner.parameters.n_estimators} trees · Learning rate{" "}
-            {winner.parameters.learning_rate} · Extra hurdle{" "}
-            {winner.parameters.min_edge_bps} bps · Entry probability{" "}
-            {percent(winner.parameters.probability_threshold)}
+            Chosen parameters · Trial {winner.trial}
           </p>
+          <dl className="parameter-grid">
+            {Object.entries(winner.parameters).map(([key, value]) => (
+              <div key={key}>
+                <dt>{parameterLabels[key] || key}</dt>
+                <dd>{settingValue(key, value)}</dd>
+              </div>
+            ))}
+          </dl>
           <div className="stats">
             <div className="stat">
               <span>Best validation net return</span>
@@ -131,6 +139,24 @@ export default function SearchResults({
               ? "The winner passed all promotion checks. Its final-test report is below."
               : "This is the best candidate found under the search ranking, but it has not passed every promotion check."}
           </p>
+          <p>
+            Validation buy-and-hold:{" "}
+            {percent(
+              (
+                winner as SearchTrial & {
+                  baselines?: Record<string, { net_return: number }>;
+                }
+              ).baselines?.buy_hold?.net_return,
+            )}{" "}
+            · Completed trades: {winner.metrics?.closed_trades ?? "N/A"}
+          </p>
+          {!result.trials.some((trial) => trial.promotion?.eligible) && (
+            <p className="notice">
+              No candidate passed all validation checks. The selected settings
+              are a research candidate, not a validated improvement over the
+              baselines.
+            </p>
+          )}
           <div className="button-row">
             <button type="button" disabled={running} onClick={onApply}>
               Use best-found settings
@@ -162,6 +188,9 @@ export default function SearchResults({
               <th>Direction accuracy</th>
               <th>Above best baseline</th>
               <th>Fold returns</th>
+              <th>Features / entry rule</th>
+              <th>Sampling / regularization</th>
+              <th>Completed trades</th>
               <th>Depth / trees</th>
               <th>Learning rate</th>
               <th>Hurdle / entry</th>
@@ -197,6 +226,18 @@ export default function SearchResults({
                     .join(" / ") || "N/A"}
                 </td>
                 <td>
+                  {settingValue("feature_set", trial.parameters.feature_set)} /{" "}
+                  {settingValue("entry_rule", trial.parameters.entry_rule)}
+                </td>
+                <td>
+                  Rows {trial.parameters.subsample ?? 1} / features{" "}
+                  {trial.parameters.colsample_bytree ?? 1}
+                  <br />
+                  Child {trial.parameters.min_child_weight ?? 5} / L2{" "}
+                  {trial.parameters.reg_lambda ?? 5}
+                </td>
+                <td>{trial.metrics?.closed_trades ?? "N/A"}</td>
+                <td>
                   {trial.parameters.max_depth} / {trial.parameters.n_estimators}
                 </td>
                 <td>{trial.parameters.learning_rate}</td>
@@ -224,14 +265,15 @@ export default function SearchResults({
         <ul>
           {Object.entries(result.space).map(([key, values]) => (
             <li key={key}>
-              {labels[key as keyof SearchParameters]}: {values.join(", ")}
+              {parameterLabels[key] || key}: {values.join(", ")}
             </li>
           ))}
         </ul>
         <p className="subtle">
           Your current settings are always included as trial 1. Additional
-          combinations are sampled with the same random seed. The data, horizon,
-          costs and validation split stay fixed.
+          combinations are sampled with the same random seed. Feature sets,
+          trading rules and regularization also vary. The data, horizon, costs
+          and validation split stay fixed.
         </p>
       </details>
       <p className="subtle">{result.warnings.join(" ")}</p>

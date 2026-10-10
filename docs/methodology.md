@@ -36,3 +36,5 @@ Broad-universe research, survivorship-bias correction, advanced corporate-action
 ## Model research
 
 Daily ML/RL training, validation-only parameter search with winner-only held-out testing, purged chronological evaluation, probability calibration, the net-equity reward, model drift and manual retraining follow [docs/ml-research.md](ml-research.md). All evaluated portfolios still use this execution contract; promotion changes only the saved research-model registry.
+
+Research v6 adds strategy activity diagnostics, saved-setting recovery, explicit fixed-date versus latest-date retraining, configurable XGBoost regularization/sampling, and causal expanded technical features. Execution, corporate-action accounting and evaluation isolation remain the same; see [script-comparison.md](script-comparison.md).

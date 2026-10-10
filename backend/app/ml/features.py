@@ -8,7 +8,7 @@ import pandas as pd
 from app.data.actions import CorporateAction
 from app.data.market import closing_times
 
-FEATURE_VERSION = "daily-features-v1"
+FEATURE_VERSION = "daily-features-v2"
 FEATURES = [
     "return_1",
     "return_5",
@@ -23,6 +23,13 @@ FEATURES = [
     "volume_ratio",
     "rsi_14",
 ]
+
+
+TECHNICAL = ["return_21", "ma_gap_50", "bollinger_percent_b", "ppo_histogram", "atr_ratio_14"]
+
+
+def feature_names(feature_set="basic"):
+    return FEATURES + TECHNICAL if feature_set == "technical" else FEATURES.copy()
 
 
 def action_arrays(frame):
@@ -67,6 +74,26 @@ def make_features(frame, req):
             "rsi_14": rsi,
         }
     )
+    mean20, std20 = close.rolling(20).mean(), close.rolling(20).std()
+    fast, slow = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
+    macd = fast - slow
+    adjusted_high, adjusted_low = frame.high * factor, frame.low * factor
+    true_range = pd.concat(
+        [
+            adjusted_high - adjusted_low,
+            (adjusted_high - close.shift()).abs(),
+            (adjusted_low - close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    result["return_21"] = close.pct_change(21)
+    result["ma_gap_50"] = close / close.rolling(50).mean() - 1
+    # Flat bands have no directional information; use the neutral midpoint.
+    result["bollinger_percent_b"] = ((close - (mean20 - 2 * std20)) / (4 * std20).replace(0, np.nan)).fillna(
+        0.5
+    )
+    result["ppo_histogram"] = (macd - macd.ewm(span=9, adjust=False).mean()) / slow
+    result["atr_ratio_14"] = true_range.rolling(14).mean() / close
     result["bar_index"] = np.arange(len(frame))
     result["timestamp"] = frame.timestamp.to_numpy()
     result["signal_time"] = closing_times(frame, req.asset, req.timeframe)

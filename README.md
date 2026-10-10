@@ -131,3 +131,7 @@ Open **http://localhost:3000/research** (or select **AI Research** in the dashbo
 - Feature drift and recent forecast deterioration are reported. Retraining is manual; automatic scheduling, PPO and live/paper trading are later work.
 
 These are research models, and they may lose, stay in cash or fail to beat simple baselines. Synthetic training results do not establish market performance. See [model methodology and research sources](docs/ml-research.md) for the complete protocol, reward, acceptance criteria and API/CLI instructions.
+
+### Research diagnostics and parameter recovery
+
+Saved model reports now show their parameters with restore/export controls. Search winners automatically populate the form. **Re-run saved dates** and **Retrain through today** distinguish fixed-history comparisons from updated market periods. Signal diagnostics explain inactivity and underperformance relative to buy-and-hold. XGBoost search also varies expanded technical features, probability-only decisions, sampling and regularization. See [script comparison and retraining behavior](docs/script-comparison.md).

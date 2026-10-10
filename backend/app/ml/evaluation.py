@@ -3,7 +3,7 @@ import numpy as np
 from app.backtesting.engine import run_engine
 from app.core.schemas import ASSETS
 from app.ml.diagnostics import prediction_metrics
-from app.ml.models import PredictionPolicy
+from app.ml.models import PredictionPolicy, entry_hurdle
 
 
 class LookupPolicy:
@@ -116,6 +116,7 @@ def evaluate(frame, features, rows, model, config, training):
             }
         )
     return {
+        "activity": activity_diagnostics(simulation, baselines, predicted, probability, config),
         "prediction": prediction_metrics(rows.target, predicted, probability),
         "prediction_baselines": {
             "zero_return": prediction_metrics(
@@ -139,3 +140,70 @@ def evaluate(frame, features, rows, model, config, training):
             config.backtest,
         ),
     }
+
+
+def activity_diagnostics(simulation, baselines, predicted, probability, config):
+    metrics = simulation["metrics"]
+    closes = simulation["equity"]
+    invested = sum(point["quantity"] > 0 for point in closes)
+    result = {
+        "entry_rule": config.entry_rule if config.algorithm == "xgboost" else "q_learning",
+        "time_in_market": invested / len(closes) if closes else 0,
+        "average_exposure": float(np.mean([point["exposure"] for point in closes])) if closes else 0,
+        "fills": metrics["fills"],
+        "closed_trades": metrics["closed_trades"],
+        "rejected_orders": len(simulation["rejected_orders"]),
+        "buy_hold_return": baselines["buy_hold"]["metrics"]["net_return"],
+        "excess_vs_buy_hold": metrics["net_return"] - baselines["buy_hold"]["metrics"]["net_return"],
+        "entry_hurdle": None,
+        "signals": None,
+        "return_passes": None,
+        "probability_passes": None,
+        "qualifying_signals": None,
+        "predicted_return_min": None,
+        "predicted_return_max": None,
+        "probability_min": None,
+        "probability_max": None,
+        "notes": [],
+    }
+    if predicted is not None:
+        predicted, probability = np.asarray(predicted), np.asarray(probability)
+        hurdle = entry_hurdle(config)
+        returns_pass = predicted > hurdle
+        probabilities_pass = probability >= config.probability_threshold
+        qualifying = (
+            probabilities_pass
+            if config.entry_rule == "probability_only"
+            else returns_pass & probabilities_pass
+        )
+        result.update(
+            entry_hurdle=hurdle,
+            signals=len(predicted),
+            return_passes=int(returns_pass.sum()),
+            probability_passes=int(probabilities_pass.sum()),
+            qualifying_signals=int(qualifying.sum()),
+            predicted_return_min=float(predicted.min()),
+            predicted_return_max=float(predicted.max()),
+            probability_min=float(probability.min()),
+            probability_max=float(probability.max()),
+        )
+        if not qualifying.any():
+            result["notes"].append(
+                "No prediction met this strategy's entry conditions. It stayed in cash; check the forecast range and probability threshold below."
+            )
+        elif not metrics["fills"]:
+            result["notes"].append(
+                "Some signals qualified but no order filled. Review cash, minimum order size, and volume limits."
+            )
+    if metrics["closed_trades"] < 5:
+        result["notes"].append(
+            f"Only {metrics['closed_trades']} completed trades; there is little independent trade evidence, even if the return is positive."
+        )
+    if result["excess_vs_buy_hold"] < 0:
+        result["notes"].append(
+            "The AI earned less than buy-and-hold over the same dates and execution settings."
+        )
+    result["notes"].append(
+        "Qualifying signals count each prediction as a possible entry; they are not a count of orders. Time invested uses daily-close holdings and can miss intraday risk."
+    )
+    return result

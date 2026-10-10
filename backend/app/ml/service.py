@@ -11,12 +11,19 @@ from app.experiments.service import CODE_VERSION as ENGINE_VERSION
 from app.ml import storage
 from app.ml.diagnostics import distribution_reference, drift
 from app.ml.evaluation import evaluate
-from app.ml.features import FEATURE_VERSION, FEATURES, chronological_plan, make_features, make_samples
+from app.ml.features import (
+    FEATURE_VERSION,
+    FEATURES,
+    chronological_plan,
+    feature_names,
+    make_features,
+    make_samples,
+)
 from app.ml.models import BoostModel
 from app.ml.rl import QModel
 from app.ml.schemas import ResearchRequest
 
-CODE_VERSION = "research-v5-" + ENGINE_VERSION
+CODE_VERSION = "research-v6.1-" + ENGINE_VERSION
 
 
 def load_model(identifier):
@@ -70,7 +77,7 @@ class WalkForwardModel:
         return Router()
 
 
-def acceptance(validation, algorithm, active):
+def acceptance(validation, algorithm, active, entry_rule="return_and_probability"):
     stats = validation["strategy"]["metrics"]
     predictive = validation["prediction"]
     baseline = max(s["metrics"]["net_return"] for s in validation["baselines"].values())
@@ -113,12 +120,15 @@ def acceptance(validation, algorithm, active):
         },
     ]
     if algorithm == "xgboost":
-        error = min(p["mae"] for p in validation["prediction_baselines"].values())
+        metric = "brier_score" if entry_rule == "probability_only" else "mae"
+        error = min(p[metric] for p in validation["prediction_baselines"].values())
         criteria.append(
             {
-                "name": "MAE beats constant prediction baselines",
-                "value": predictive["mae"] - error,
-                "passed": predictive["mae"] < error,
+                "name": "Brier score beats constant probability baseline"
+                if metric == "brier_score"
+                else "MAE beats constant prediction baselines",
+                "value": predictive[metric] - error,
+                "passed": predictive[metric] < error,
             }
         )
     return {
@@ -126,7 +136,7 @@ def acceptance(validation, algorithm, active):
         "criteria": criteria,
         "active_model_at_training": active,
         "incumbent_comparison": None,
-        "policy": "Fixed v1 criteria use walk-forward validation only. Holdout results are reporting only; repeated user research consumes that holdout.",
+        "policy": "Fixed v2 criteria use walk-forward validation only; probability-only strategies are judged against constant probability calibration, joint strategies against constant return prediction. Holdout results are reporting only; repeated user research consumes that holdout.",
     }
 
 
@@ -207,7 +217,7 @@ def validate(config, prepared, progress=lambda message: None):
     validation_rows = pd.concat([b[1] for b in blocks], ignore_index=True)
     oof = WalkForwardModel(blocks, config.algorithm)
     validation = evaluate(frame, features, validation_rows, oof, config, plan[0][0])
-    promotion = acceptance(validation, config.algorithm, active)
+    promotion = acceptance(validation, config.algorithm, active, config.entry_rule)
     comparison_id = active or config.parent_id
     if comparison_id:
         incumbent = storage.result(comparison_id)
@@ -275,7 +285,8 @@ def complete(config, prepared, validated, progress=lambda message: None, selecti
     )
     progress("Evaluating frozen model on final held-out period")
     test = evaluate(frame, features, holdout, final, config, training)
-    reference = distribution_reference(training)
+    selected_features = feature_names(config.feature_set) if config.algorithm == "xgboost" else FEATURES
+    reference = distribution_reference(training, selected_features)
     latest = features.tail(1)
     predicted, probability = final.predict(latest)
     latest_prediction = {
@@ -300,7 +311,8 @@ def complete(config, prepared, validated, progress=lambda message: None, selecti
         id=identifier_value,
         created_at=datetime.now(UTC).isoformat(),
         **identity_data,
-        features=FEATURES,
+        features=selected_features,
+        retraining=retraining_summary(config, prepared, validation, test),
         training={
             **final.metadata,
             "rows": len(training),
@@ -316,7 +328,8 @@ def complete(config, prepared, validated, progress=lambda message: None, selecti
         drift=drift(reference, holdout, test["predictions"]),
         warnings=warnings,
         assumptions=[
-            "Features use completed daily bars, a 60-bar warm-up, and dimensionless causal split adjustment.",
+            f"Features use the {config.feature_set if config.algorithm == 'xgboost' else 'basic'} set, completed daily bars, a 60-bar warm-up, and dimensionless causal split adjustment.",
+            f"Entry rule: {config.entry_rule}. Probability-only policies ignore the return hurdle, but modeled trading costs still apply.",
             f"Return labels run from the next open to the open {config.horizon} bar(s) later, including split/dividend entitlement economics.",
             "Expanding training folds purge every label whose endpoint reaches the next prediction boundary; all hyperparameters and hurdles are fixed before evaluation.",
             "XGBoost uses separate chronological core, early-stopping, and calibration blocks; fitted final-model components see no held-out labels.",
@@ -324,7 +337,7 @@ def complete(config, prepared, validated, progress=lambda message: None, selecti
             "Probability diagnostics include Brier, log loss, reliability bins and expected calibration error. Rank correlation is temporal Spearman within one asset, not cross-sectional ranking.",
             "Regime thresholds come from training volatility only; small regime groups are flagged.",
             "RL trains repeated historical episodes on training bars only, then freezes its table for unseen validation/test periods. Costs enter reward through actual net equity.",
-            "Manual retraining refreshes provider data and creates a separate candidate. Promotion is explicit and gated; previous versions remain available.",
+            "Latest-date retraining refreshes provider history; saved-date reruns use cached history and current code. Both create separate candidates and preserve previous versions. Promotion is explicit and gated.",
         ],
     )
     progress("Saving model, provenance and evaluation")
@@ -343,3 +356,62 @@ def execute(config, progress=lambda message: None):
         return storage.result(version)
     validated = validate(config, prepared, progress)
     return complete(config, prepared, validated, progress)
+
+
+def retraining_summary(config, prepared, validation, holdout, current_code=CODE_VERSION):
+    if config.parent_id is None:
+        return None
+    parent = storage.result(config.parent_id)
+    old = ResearchRequest.model_validate(parent["config"])
+    excluded = {"backtest", "parent_id", "refresh_data"}
+
+    def dates(report):
+        return [point["timestamp"] for point in report["strategy"]["equity"]]
+
+    return {
+        "parent_id": config.parent_id,
+        "source_search_id": (parent.get("search") or {}).get("id")
+        or (parent.get("retraining") or {}).get("source_search_id"),
+        "previous_start": old.backtest.start.isoformat(),
+        "previous_end": old.backtest.end.isoformat(),
+        "current_start": config.backtest.start.isoformat(),
+        "current_end": config.backtest.end.isoformat(),
+        "previous_holdout_start": parent["training"]["holdout_start"],
+        "current_holdout_start": prepared["holdout_start"]
+        if "holdout_start" in prepared
+        else prepared["holdout"].signal_time.iloc[0].isoformat(),
+        "parameters_preserved": old.model_dump(exclude=excluded) == config.model_dump(exclude=excluded),
+        "same_validation_dates": dates(parent["validation"]) == dates(validation),
+        "same_holdout_dates": dates(parent["holdout"]) == dates(holdout),
+        "previous_validation_return": parent["validation"]["strategy"]["metrics"]["net_return"],
+        "previous_test_return": parent["holdout"]["strategy"]["metrics"]["net_return"],
+        "data_changed": parent["provenance"]["dataset_hash"] != prepared["provenance"]["dataset_hash"],
+        "code_changed": parent["code_version"] != current_code,
+    }
+
+
+def annotate_saved_result(result):
+    """Add explanations to legacy reports without changing their saved scores."""
+    from app.ml.evaluation import activity_diagnostics
+
+    config = ResearchRequest.model_validate(result["config"])
+    for name in ("validation", "holdout"):
+        report = result[name]
+        if report.get("activity") is None:
+            predictions = report["predictions"]
+            predicted = [p["predicted_return"] for p in predictions]
+            probability = [p["probability_up"] for p in predictions]
+            if not predicted or any(p is None for p in predicted):
+                predicted = probability = None
+            report["activity"] = activity_diagnostics(
+                report["strategy"], report["baselines"], predicted, probability, config
+            )
+    if config.parent_id and result.get("retraining") is None:
+        result["retraining"] = retraining_summary(
+            config,
+            {"provenance": result["provenance"], "holdout_start": result["training"]["holdout_start"]},
+            result["validation"],
+            result["holdout"],
+            result["code_version"],
+        )
+    return result

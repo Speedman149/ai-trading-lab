@@ -20,6 +20,12 @@ class ResearchRequest(BaseModel):
     learning_rate: float = Field(0.05, ge=0.01, le=0.3)
     min_edge_bps: float = Field(5, ge=0, le=200, allow_inf_nan=False)
     probability_threshold: float = Field(0.55, ge=0.5, le=0.9)
+    feature_set: Literal["basic", "technical"] = "basic"
+    entry_rule: Literal["return_and_probability", "probability_only"] = "return_and_probability"
+    subsample: float = Field(1, ge=0.5, le=1, allow_inf_nan=False)
+    colsample_bytree: float = Field(1, ge=0.5, le=1, allow_inf_nan=False)
+    min_child_weight: float = Field(5, ge=1, le=20, allow_inf_nan=False)
+    reg_lambda: float = Field(5, ge=0, le=50, allow_inf_nan=False)
     seed: int = Field(42, ge=0, le=2147483647)
     episodes: int = Field(20, ge=2, le=60)
     drawdown_penalty: float = Field(0, ge=0, le=2, allow_inf_nan=False)
@@ -54,6 +60,12 @@ class Evaluation(BaseModel):
     baselines: dict[str, SimulationResult]
     regimes: list[dict]
     predictions: list[dict]
+    activity: dict | None = None
+
+
+class RetrainRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["latest", "same_dates"] = "latest"
 
 
 class ResearchResult(BaseModel):
@@ -76,6 +88,7 @@ class ResearchResult(BaseModel):
     warnings: list[str]
     assumptions: list[str]
     search: dict | None = None
+    retraining: dict | None = None
 
 
 class ResearchJob(BaseModel):
@@ -107,7 +120,7 @@ class SearchResult(BaseModel):
     status: Literal["running", "completed", "failed"]
     created_at: str
     config: SearchRequest
-    space: dict[str, list[int | float]]
+    space: dict[str, list[int | float | str]]
     selection_policy: str
     code_version: str
     provenance: DatasetProvenance
