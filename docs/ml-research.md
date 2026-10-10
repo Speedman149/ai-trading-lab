@@ -2,6 +2,25 @@
 
 The AI Research page is at http://localhost:3000/research. It trains candidates locally, evaluates actual forecasts and broker results, and saves each version. Supported assets are AAPL, SPY, BTC/USD and ETH/USD; this milestone uses daily bars. Synthetic mode is a workflow demonstration, not evidence of investment performance.
 
+## Settings in plain language
+
+| Setting | Meaning |
+| --- | --- |
+| Forecast horizon | How many daily opening-to-opening intervals the model forecasts, starting at the next opening after a completed bar. It is not a mandatory holding period. |
+| Tree depth | Maximum number of decision levels in a tree. Greater depth adds complexity and overfitting risk. |
+| Maximum trees | Upper limit per XGBoost model; early stopping may select fewer. |
+| Learning rate | Size of each added tree's contribution to the model, not retraining frequency. |
+| Extra return hurdle | Predicted return required above modeled round-trip costs. 5 basis points equals 0.05%. |
+| Entry probability | Minimum calibrated estimate of a positive economic return. 0.55 means 55%; the return hurdle must also pass. |
+| Walk-forward folds | Number of later evaluation blocks, each tested by a fresh model trained on preceding data. |
+| Random seed | Controls reproducible randomness. The numeric value does not indicate quality. |
+| Final test fraction | Share of the newest usable labeled history reserved for final testing. 0.20 means 20%. |
+| Initial capital | Simulated starting portfolio cash in dollars. |
+
+With roughly 1,000 usable labeled samples and a 20% final test, the first 500 initialize training, the next roughly 300 form the walk-forward blocks, and the newest 200 are held out. Boundary purging can reduce these counts. Each walk-forward fold expands the available training history; the final held-out period uses one frozen model trained only on preceding history. Its results report unseen-period performance and do not decide promotion.
+
+Promotion marks a saved version as the active research model; it does not place brokerage orders. An ineligible candidate shows the number of failed validation checks and stays disabled. An already active version says "Already active." A waiting cursor and "Promoting..." appear only during the actual promotion request. A server rejection appears as an error and releases the button.
+
 ## Training protocol
 
 Use at least 250 labeled samples after a 60-bar warm-up: roughly two years of stocks or one year of crypto. Requests can span up to 3,650 days. Missing bars and unsupported equity actions still fail rather than being filled or ignored.

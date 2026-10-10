@@ -82,6 +82,119 @@ test("XGBoost training shows backend evaluation, calibration and saved versions"
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
   await page.screenshot({ path: "../artifacts/ml-mobile.png", fullPage: true });
+
+  // Exercise eligibility, a real pending request, failure recovery and success
+  // without changing the local model registry.
+  let active = false;
+  let eligible = false;
+  let attempts = 0;
+  let finishPromotion: (() => void) | undefined;
+  const savedVersion = {
+    id: report.id,
+    created_at: report.created_at,
+    asset: report.config.backtest.asset,
+    algorithm: report.config.algorithm,
+    provider: report.config.backtest.provider,
+    net_return: report.holdout.strategy.metrics.net_return,
+    eligible: true,
+    rollback_available: false,
+  };
+  await page.route("**/api/research/jobs", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/api/research/versions", (route) =>
+    route.fulfill({ json: [{ ...savedVersion, active, eligible }] }),
+  );
+  await page.route("**/api/research/versions/" + report.id, (route) =>
+    route.fulfill({
+      json: {
+        ...report,
+        promotion: {
+          ...report.promotion,
+          eligible,
+          criteria: report.promotion.criteria.map(
+            (criterion: { name: string }, index: number) => ({
+              ...criterion,
+              passed: eligible || index !== 0,
+            }),
+          ),
+        },
+      },
+    }),
+  );
+  await page.route(
+    "**/api/research/versions/" + report.id + "/promote",
+    async (route) => {
+      attempts += 1;
+      await new Promise<void>((resolve) => {
+        finishPromotion = resolve;
+      });
+      finishPromotion = undefined;
+      if (attempts === 1) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            detail: "Active model changed since this candidate was trained.",
+          },
+        });
+      } else {
+        active = true;
+        await route.fulfill({ json: { active: report.id } });
+      }
+    },
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "View results" }).click();
+  const promote = page.getByRole("button", {
+    name: "Promote candidate",
+    exact: true,
+  });
+  await expect(promote).toBeDisabled();
+  await expect(promote).toHaveCSS("cursor", "not-allowed");
+  await expect(promote).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator("#promotion-status")).toContainText(
+    "1 validation check failed",
+  );
+  expect(attempts).toBe(0);
+  await expect(page.locator("#horizon")).toHaveAccessibleDescription(
+    /from the next market open to the following open/,
+  );
+  await expect(page.locator("#evaluation-period-help")).toContainText(
+    "one frozen model",
+  );
+  eligible = true;
+  await page.reload();
+  await page.getByRole("button", { name: "View results" }).click();
+  await expect(promote).toBeEnabled();
+  await promote.click();
+  const promoting = page.getByRole("button", { name: "Promoting…" });
+  await expect(promoting).toBeDisabled();
+  await expect(promoting).toHaveAttribute("aria-busy", "true");
+  await expect(promoting).toHaveCSS("cursor", "wait");
+  await expect(
+    page.getByRole("heading", { name: "Training and testing", exact: true }),
+  ).toHaveCount(0);
+  await expect.poll(() => Boolean(finishPromotion)).toBeTruthy();
+  finishPromotion!();
+  await expect(page.locator(".error[role=alert]")).toContainText(
+    "Active model changed",
+  );
+  await expect(promote).toBeEnabled();
+  await expect(promote).toHaveCSS("cursor", "pointer");
+  await promote.click();
+  await expect(promoting).toBeVisible();
+  await expect.poll(() => Boolean(finishPromotion)).toBeTruthy();
+  finishPromotion!();
+  const alreadyActive = page.getByRole("button", { name: "Already active" });
+  await expect(alreadyActive).toBeDisabled();
+  await expect(alreadyActive).toHaveCSS("cursor", "not-allowed");
+  await expect(page.locator("#promotion-status")).toContainText(
+    "already active; no promotion is needed",
+  );
+  await expect(
+    page.getByText("Candidate is now the active research model."),
+  ).toBeVisible();
+  expect(attempts).toBe(2);
 });
 
 test("RL trains as a job and reports strategy metrics without fabricated prediction accuracy", async ({

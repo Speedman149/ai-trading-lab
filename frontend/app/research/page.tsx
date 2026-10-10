@@ -156,6 +156,27 @@ const defaults = {
   cash_reserve: 0.05,
   max_participation: 0.01,
 };
+const settingHelp: Partial<Record<keyof typeof defaults, string>> = {
+  horizon:
+    "Daily bars ahead: 1 forecasts from the next market open to the following open. This does not force a one-day holding period.",
+  max_depth:
+    "Maximum decision levels in each tree. Deeper trees learn more complex patterns and can overfit.",
+  n_estimators:
+    "Maximum trees per XGBoost model. Early stopping may use fewer trees.",
+  learning_rate:
+    "How much each new tree changes the forecast. Smaller values make smaller learning steps.",
+  min_edge_bps:
+    "Extra predicted return required above modeled round-trip trading costs. 5 bps = 0.05%.",
+  probability_threshold:
+    "Minimum estimated chance of a positive return to enter. 0.55 = 55%; the return hurdle must also pass.",
+  folds:
+    "Train on earlier history, test the next block, then expand training and repeat this many times.",
+  seed: "Controls randomness so the same data and settings can reproduce a run. A higher number does not mean better predictions.",
+  holdout_fraction:
+    "Newest share of usable history reserved for the final test. 0.20 = 20%; it never trains the model.",
+  initial_cash:
+    "Starting money in the simulated portfolio. No money is deposited or traded.",
+};
 const percent = (v: number | null | undefined) =>
   v == null ? "N/A" : (v * 100).toFixed(2) + "%";
 const decimal = (v: number | null | undefined, digits = 3) =>
@@ -196,8 +217,16 @@ export default function ResearchPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const running =
-    submitting || job?.status === "running" || job?.status === "queued";
+  const [pendingAction, setPendingAction] = useState<{
+    id: string;
+    operation: "retrain" | "promote" | "rollback";
+  } | null>(null);
+  const training =
+    submitting ||
+    pendingAction?.operation === "retrain" ||
+    job?.status === "running" ||
+    job?.status === "queued";
+  const running = training || pendingAction !== null;
   const reloadVersions = async () =>
     setVersions(await request<Version[]>("/api/research/versions"));
   useEffect(() => {
@@ -280,8 +309,14 @@ export default function ResearchPage() {
         max={max}
         step={step}
         value={form[key]}
+        aria-describedby={settingHelp[key] ? key + "-help" : undefined}
         onChange={(e) => change(key, Number(e.target.value))}
       />
+      {settingHelp[key] && (
+        <p id={key + "-help"} className="subtle field-hint">
+          {settingHelp[key]}
+        </p>
+      )}
     </div>
   );
   async function train(e: React.FormEvent) {
@@ -352,7 +387,7 @@ export default function ResearchPage() {
   ) {
     setError("");
     setMessage("");
-    setSubmitting(true);
+    setPendingAction({ id, operation });
     try {
       const response = await request<Job>(
         "/api/research/versions/" + id + "/" + operation,
@@ -372,7 +407,7 @@ export default function ResearchPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Model operation failed");
     } finally {
-      setSubmitting(false);
+      setPendingAction(null);
     }
   }
   const evaluation = report?.[period];
@@ -391,7 +426,25 @@ export default function ResearchPage() {
     ...(reliability || []),
     { probability: 1, ideal: 1 },
   ];
-  const active = versions.find((version) => version.id === report?.id)?.active;
+  const active = Boolean(
+    versions.find((version) => version.id === report?.id)?.active,
+  );
+  const promoting =
+    pendingAction?.operation === "promote" && pendingAction.id === report?.id;
+  const failedChecks =
+    report?.promotion.criteria.filter((criterion) => !criterion.passed)
+      .length || 0;
+  const promotionReason = promoting
+    ? "Promoting this candidate..."
+    : active
+      ? "This version is already active; no promotion is needed."
+      : training
+        ? "Promotion unavailable while training is in progress."
+        : pendingAction
+          ? "Wait for the current model update to finish."
+          : report && !report.promotion.eligible
+            ? `Promotion unavailable: ${failedChecks} validation check${failedChecks === 1 ? "" : "s"} failed. Review the red Fail rows above.`
+            : "Promotion marks this saved version as the active research model. It does not place brokerage orders.";
   return (
     <main className="shell">
       <header>
@@ -558,8 +611,12 @@ export default function ResearchPage() {
                 )}
               </div>
             </details>
-            <button className="run" disabled={running}>
-              {running ? "Training in progress…" : "Train & Evaluate"}
+            <button className="run" disabled={running} aria-busy={training}>
+              {training
+                ? "Training in progress…"
+                : pendingAction
+                  ? "Model update in progress…"
+                  : "Train & Evaluate"}
             </button>
             <p className="subtle">
               Chronological splits · Purged labels · Next-open fills
@@ -596,8 +653,15 @@ export default function ResearchPage() {
                       type="button"
                       onClick={() => action(version.id, "rollback")}
                       disabled={running}
+                      aria-busy={
+                        pendingAction?.operation === "rollback" &&
+                        pendingAction.id === version.id
+                      }
                     >
-                      Restore version
+                      {pendingAction?.operation === "rollback" &&
+                      pendingAction.id === version.id
+                        ? "Restoring…"
+                        : "Restore version"}
                     </button>
                   )}
                 </div>
@@ -612,7 +676,7 @@ export default function ResearchPage() {
             </div>
           )}
           {message && <div className="notice">{message}</div>}
-          {running && (
+          {training && (
             <div className="panel empty">
               <div>
                 <h2>Training and testing</h2>
@@ -665,6 +729,7 @@ export default function ResearchPage() {
                   <button
                     type="button"
                     aria-pressed={period === "holdout"}
+                    aria-describedby="evaluation-period-help"
                     onClick={() => setPeriod("holdout")}
                   >
                     Final held-out test
@@ -672,11 +737,17 @@ export default function ResearchPage() {
                   <button
                     type="button"
                     aria-pressed={period === "validation"}
+                    aria-describedby="evaluation-period-help"
                     onClick={() => setPeriod("validation")}
                   >
                     Walk-forward validation
                   </button>
                 </div>
+                <p className="subtle" id="evaluation-period-help">
+                  {period === "holdout"
+                    ? "The newest reserved data tests one frozen model trained only on earlier history. These results do not decide promotion. Repeatedly changing settings based on this test uses up its independence."
+                    : "Each fold trains a fresh model on earlier history and tests the next unseen block. Training history expands between folds; the combined results are used for the promotion checks."}
+                </p>
               </div>
               <h2>
                 {period === "holdout"
@@ -1039,18 +1110,33 @@ export default function ResearchPage() {
                   <button
                     type="button"
                     disabled={running}
+                    aria-busy={
+                      pendingAction?.operation === "retrain" &&
+                      pendingAction.id === report.id
+                    }
                     onClick={() => action(report.id, "retrain")}
                   >
-                    Refresh data & retrain
+                    {pendingAction?.operation === "retrain"
+                      ? "Submitting retraining…"
+                      : "Refresh data & retrain"}
                   </button>
                   <button
                     type="button"
                     disabled={running || !report.promotion.eligible || active}
+                    aria-busy={promoting}
+                    aria-describedby="promotion-status"
                     onClick={() => action(report.id, "promote")}
                   >
-                    Promote candidate
+                    {promoting
+                      ? "Promoting…"
+                      : active
+                        ? "Already active"
+                        : "Promote candidate"}
                   </button>
                 </div>
+                <p className="subtle" id="promotion-status" role="status">
+                  {promotionReason}
+                </p>
                 <p className="subtle">
                   Retraining uses newly completed daily bars, preserves this
                   version and trains a separate candidate. Promotion uses fixed

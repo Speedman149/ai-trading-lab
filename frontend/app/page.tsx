@@ -299,7 +299,7 @@ export default function Page() {
               Allow fractional shares / units
             </label>
           </details>
-          <button className="run" disabled={loading}>
+          <button className="run" disabled={loading} aria-busy={loading}>
             {loading ? "Running simulation…" : "Run Backtest →"}
           </button>
           <p className="subtle">
