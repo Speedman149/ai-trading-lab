@@ -1,0 +1,17 @@
+.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.next/
+*.tsbuildinfo
+data/raw/*
+data/processed/*
+artifacts/*
+!**/.gitkeep
+*.log
+frontend/test-results/
+frontend/playwright-report/

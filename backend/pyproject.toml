@@ -1,0 +1,11 @@
+[project]
+name = "ai-trading-lab"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["fastapi", "uvicorn", "pydantic-settings", "pandas", "numpy", "pyarrow", "duckdb", "backtrader", "exchange-calendars", "httpx"]
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+[tool.pytest.ini_options]
+pythonpath = ["."]
+[tool.ruff]
+line-length = 110
