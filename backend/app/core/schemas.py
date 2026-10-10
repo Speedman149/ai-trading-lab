@@ -46,6 +46,7 @@ class EquityPoint(BaseModel):
     exposure: float
     unrealized_pnl: float
     drawdown: float
+    dividend_receivable: float = 0
 
 
 class FillRecord(BaseModel):
@@ -71,7 +72,17 @@ class RejectedOrder(BaseModel):
     reason: str
 
 
+class CorporateActionEvent(BaseModel):
+    id: str
+    kind: Literal["split", "dividend_entitlement", "dividend_payment"]
+    timestamp: str
+    quantity: float
+    amount: float
+    ratio: float
+
+
 class SimulationResult(BaseModel):
+    corporate_actions: list[CorporateActionEvent] = Field(default_factory=list)
     metrics: dict[str, float | int | None]
     equity: list[EquityPoint]
     trades: list[FillRecord]
@@ -90,6 +101,9 @@ class DatasetProvenance(BaseModel):
     dataset_hash: str
     rows: int
     synthetic: bool
+    processing_version: str
+    corporate_actions_hash: str
+    corporate_actions_count: int
 
 
 class BacktestResult(SimulationResult):

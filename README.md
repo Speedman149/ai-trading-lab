@@ -48,16 +48,16 @@ cd ~/projects/ai-trading-lab/backend
 
 ## Alpaca configuration
 
-Copy `.env.example` to `.env` in the repository root and set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`. Restart the backend. Never place these values in frontend variables. Choose Alpaca and a crypto asset in the dashboard. No automatic fallback disguises a provider error as real data.
+Copy `.env.example` to `.env` in the repository root and set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`. Restart the backend. Never place these values in frontend variables. Choose Alpaca and a crypto asset in the dashboard. Crypto historical data works even without these keys. No automatic fallback disguises a provider error as real data.
 
-Daily raw equity data can be ingested (not simulated) with:
+Daily raw equity data and validated corporate-action records can be ingested with:
 
 ```bash
 cd backend
 ../.venv/bin/python -m app.data.download --asset AAPL --start 2024-01-02 --end 2024-06-30
 ```
 
-**Real equity backtests are deliberately gated until split/dividend accounting is implemented and verified.** Adjusted prices are not silently used as executable prices. Real equity intraday ingestion also awaits session-aligned aggregation. Provider tests use mocked responses; no live Alpaca request has been verified without credentials. Crypto gaps fail explicitly rather than inventing missing prices. Feed entitlements may affect availability. `ALPACA_FEED=iex` configures daily stock ingestion.
+**Daily real equity backtests now support forward/reverse splits and ordinary USD cash dividends**, provided the corporate-action endpoint is accessible and its records validate. Adjusted prices are not used as executable prices. Unsupported actions and missing action metadata fail explicitly. Real equity intraday ingestion awaits session-aligned aggregation. Stock integration is tested with mocked responses and live AAPL/SPY requests using the local account configuration. Live AAPL split and AAPL/SPY dividend periods were verified. Public Bitcoin/Ethereum history was downloaded and simulated without requiring keys. Crypto gaps fail explicitly rather than inventing missing prices. Feed entitlements may affect availability. `ALPACA_FEED=iex` configures daily stock ingestion.
 
 The official [Alpaca historical stock bars reference](https://docs.alpaca.markets/us/reference/stockbars) documents the raw data endpoint. The frontend uses Node 22, which satisfies the [Next.js 16 runtime requirements](https://nextjs.org/docs/app/guides/upgrading/version-16).
 
@@ -97,5 +97,23 @@ The browser tests start the production frontend and backend themselves; build fi
 - `frontend/app/page.tsx`, `globals.css`: integrated research interface.
 - `frontend/tests/research.spec.ts`: browser integration tests.
 
-Read [research methodology](docs/methodology.md) for exact simulation assumptions and [roadmap](docs/roadmap.md) for remaining work. This is a foundation, not a completed AI trading system. The next milestone is verified real equity data and corporate-action accounting, before machine learning.
+Read [research methodology](docs/methodology.md) for exact simulation assumptions and [roadmap](docs/roadmap.md) for remaining work. This is a foundation, not a completed AI trading system. The next milestone is credentialed real equity verification and session-aligned intraday aggregation, before machine learning.
 Verification evidence is recorded in [docs/verification.md](docs/verification.md).
+
+## Connect real market data
+
+**Try real crypto now:** select Alpaca historical data, BTC/USD or ETH/USD, and Run Backtest. No account or API keys are needed for this public endpoint.
+
+**Stocks/ETFs:** create an account at https://app.alpaca.markets/signup, then open its dashboard and generate API keys. Use the paper environment credentials for research. Follow the [official account/key guide](https://docs.alpaca.markets/us/docs/getting-started-with-alpaca-market-data). This application's adapter only calls data endpoints, never order-placement endpoints.
+
+The repository root has a local .env template. Open it in VS Code and fill these values locally:
+
+```dotenv
+ALPACA_API_KEY=your_key_here
+ALPACA_SECRET_KEY=your_secret_here
+ALPACA_FEED=iex
+```
+
+Do not send keys in chat or commit this file. After saving, restart with bash scripts/dev.sh, select Alpaca, AAPL/SPY, and **1d**. Access to corporate actions is required too; if your account lacks access, the app reports that error instead of presenting an unchecked stock result. Provider entitlement issues cannot be solved by bypassing action validation.
+
+See [docs/corporate-actions.md](docs/corporate-actions.md) for the supported event rules and limitations.

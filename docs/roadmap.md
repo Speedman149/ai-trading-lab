@@ -2,11 +2,11 @@
 
 Foundation: FastAPI, Next.js, dependency locks, data validation/storage, deterministic samples, Backtrader wrapper, two strategies, cost/risk accounting, metrics, API, and browser workflow are implemented.
 
-The first demo milestone supports stocks and crypto without credentials. Phase 1 remains incomplete for full real equity research: corporate actions and session-aligned real intraday equity ingestion are pending. Alpaca integration is verified with mocks, not a credentialed live request.
+The first demo milestone supports stocks and crypto without credentials. Daily real equity accounting now supports splits and ordinary cash dividends, with validated metadata and rejection of unsupported actions. Session-aligned real intraday equity ingestion is pending. Public crypto and credentialed AAPL/SPY stock/action requests have been verified live, including dividend and split periods.
 
 Next milestone:
-1. Verify read-only Alpaca requests with user-supplied credentials and record real dataset provenance.
-2. Add complete split/dividend metadata and portfolio adjustments with hand-calculated fixtures; then enable real equity simulation.
+1. Expand real-data verification to additional supported periods and revision scenarios.
+2. Verify live split/dividend metadata and expand support for advanced actions and provider revisions.
 3. Aggregate minute equity data into session-aligned hourly bars and validate late revisions/completion status.
 4. Add experiment browsing and explicit cache refresh, then measure backtest runtime limits.
 

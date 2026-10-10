@@ -38,6 +38,14 @@ type Result = {
   assumptions: string[];
   config: Record<string, unknown>;
   rejected_orders: { timestamp: string; reason: string }[];
+  corporate_actions: {
+    id: string;
+    kind: string;
+    timestamp: string;
+    quantity: number;
+    amount: number;
+    ratio: number;
+  }[];
 };
 const defaults = {
   asset: "AAPL",
@@ -166,7 +174,7 @@ export default function Page() {
       <div className="notice">
         {form.provider === "synthetic"
           ? "Synthetic demonstration mode — generated prices, not real market history or investment performance."
-          : "Alpaca historical mode — credentials required. Crypto supported; equities await corporate-action accounting."}
+          : "Real market history — Bitcoin/Ethereum need no account. Daily stocks need Alpaca API keys and supported split/dividend records."}
       </div>
       <div className="grid">
         <form className="panel" onSubmit={run}>
@@ -290,6 +298,30 @@ export default function Page() {
           <p className="subtle">
             Long-only · No leverage · Next-bar open execution
           </p>
+          {form.provider === "alpaca" && (
+            <details open>
+              <summary>Connect real stock data</summary>
+              <p>
+                Bitcoin and Ethereum history work without API keys. For stocks,
+                create an Alpaca account, generate API keys, and add them to the
+                local .env file. Restart the backend after saving. Choose 1d for
+                real stocks.
+              </p>
+              <p>
+                <a
+                  href="https://docs.alpaca.markets/us/docs/getting-started-with-alpaca-market-data"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Alpaca account and API-key guide ↗
+                </a>
+              </p>
+              <p>
+                Your keys stay in the Python backend. This app only reads market
+                data.
+              </p>
+            </details>
+          )}
         </form>
         <section aria-live="polite">
           {error && (
@@ -463,6 +495,20 @@ export default function Page() {
                   <pre style={{ whiteSpace: "pre-wrap" }}>
                     {JSON.stringify(result.config, null, 2)}
                   </pre>
+                  <p>
+                    Dividend income: {money(result.metrics.dividend_income)} ·
+                    Unpaid dividends:{" "}
+                    {money(result.metrics.dividend_receivable)}
+                  </p>
+                  {result.corporate_actions.map((event, i) => (
+                    <p key={i}>
+                      {event.timestamp.slice(0, 10)} ·{" "}
+                      {event.kind.replaceAll("_", " ")} ·{" "}
+                      {event.kind === "split"
+                        ? event.ratio + ":1 share ratio"
+                        : money(event.amount)}
+                    </p>
+                  ))}
                   {result.assumptions.map((a) => (
                     <p key={a}>{a}</p>
                   ))}

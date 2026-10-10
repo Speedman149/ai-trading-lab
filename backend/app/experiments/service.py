@@ -5,16 +5,12 @@ import tempfile
 from app.backtesting.engine import run_engine
 from app.core.config import ROOT
 from app.core.schemas import BacktestRequest
-from app.data.market import DataError, load
+from app.data.market import load
 
-CODE_VERSION = "backtest-v2"
+CODE_VERSION = "backtest-v3-actions"
 
 
 def execute(req: BacktestRequest):
-    if req.provider == "alpaca" and req.asset in ("AAPL", "SPY"):
-        raise DataError(
-            "Real equity backtests require verified split/dividend accounting, which is pending. Daily raw equity ingestion is available through app.data.download."
-        )
     frame, provenance = load(req)
     config = req.model_dump(mode="json")
     identity = {"config": config, "provenance": provenance, "code_version": CODE_VERSION}
@@ -28,7 +24,9 @@ def execute(req: BacktestRequest):
         "benchmark": run_engine(frame, req.model_copy(update={"strategy": "buy_hold"})),
         "warnings": ["SYNTHETIC demonstration data: no historical investment conclusions."]
         if provenance["synthetic"]
-        else [],
+        else [
+            "Historical provider records can be revised. Corporate-action creation times are not guaranteed; this is retrospective accounting, not an announcement-time trading signal."
+        ],
         "assumptions": [
             "Completed-bar signals fill at next available open; final positions marked to close, not liquidated.",
             "Modeled half-spread plus additional slippage, not measured quotes.",
@@ -37,6 +35,7 @@ def execute(req: BacktestRequest):
             "Gross return adds costs back to the same fills; it is not a separate zero-cost strategy.",
             "Daily-close risk metrics; 252 equity sessions / 365 crypto days; zero risk-free rate.",
             "Single long-only asset; allocation/reserve limits apply at entry, exposure can drift thereafter.",
+            "Stock splits adjust holdings and pending orders on ex-date; ordinary dividends accrue from overnight holdings and become cash on payable date. No tax withholding modeled.",
         ],
     }
     serialized = json.dumps(result, allow_nan=False)

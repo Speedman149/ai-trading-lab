@@ -3,11 +3,11 @@ from datetime import date
 import httpx
 import pytest
 
+from app.backtesting.engine import run_engine
 from app.core.config import settings
 from app.core.schemas import BacktestRequest
 from app.data import market
 from app.data.market import AlpacaProvider, DataError
-from app.experiments.service import execute
 
 
 def configure(monkeypatch, handler):
@@ -46,11 +46,13 @@ def test_crypto_pagination(monkeypatch):
     assert all(call.method == "GET" for call in calls)
 
 
-def test_equity_raw_ingestion_and_simulation_gate(monkeypatch):
+def test_equity_raw_ingestion_and_verified_simulation(monkeypatch):
     calls = []
 
     def handler(req):
         calls.append(req)
+        if req.url.path == "/v1/corporate-actions":
+            return httpx.Response(200, json={"corporate_actions": {}})
         return httpx.Response(
             200, json={"bars": {"AAPL": [row("2024-01-02T05:00:00Z"), row("2024-01-03T05:00:00Z")]}}
         )
@@ -61,9 +63,8 @@ def test_equity_raw_ingestion_and_simulation_gate(monkeypatch):
     assert calls[0].url.path == "/v2/stocks/bars"
     assert calls[0].url.params["adjustment"] == "raw"
     assert data.timestamp.iloc[0].hour == 14
-    assert not data.corporate_actions_verified.any()
-    with pytest.raises(DataError, match="split/dividend"):
-        execute(req)
+    assert data.corporate_actions_verified.all()
+    assert run_engine(data, req.model_copy(update={"strategy": "buy_hold"}))["metrics"]["fills"] == 1
 
 
 @pytest.mark.parametrize("status", [429, 503, 401])
@@ -72,6 +73,8 @@ def test_provider_failures_and_retries(monkeypatch, status):
 
     def handler(req):
         calls.append(req)
+        if req.url.path == "/v1/corporate-actions":
+            return httpx.Response(200, json={"corporate_actions": {}})
         return httpx.Response(status, json={"secret": "must never appear in errors"})
 
     configure(monkeypatch, handler)
@@ -97,4 +100,4 @@ def test_no_credentials_explicit_error(monkeypatch):
     monkeypatch.setattr(settings, "alpaca_api_key", "")
     monkeypatch.setattr(settings, "alpaca_secret_key", "")
     with pytest.raises(DataError, match="ALPACA_API_KEY"):
-        AlpacaProvider().load(BacktestRequest(asset="BTC/USD", provider="alpaca"))
+        AlpacaProvider().load(BacktestRequest(asset="AAPL", provider="alpaca"))

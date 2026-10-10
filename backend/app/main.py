@@ -46,8 +46,10 @@ def strategies():
 def status():
     return {
         "synthetic_available": True,
+        "public_crypto_available": True,
+        "alpaca_equity_timeframes": ["1d"],
         "alpaca_configured": bool(settings.alpaca_api_key and settings.alpaca_secret_key),
-        "alpaca_equities_enabled": False,
+        "alpaca_equities_enabled": True,
         "cached_datasets": len(list((ROOT / "data" / "processed").glob("*.parquet"))),
     }
 

@@ -4,9 +4,13 @@ import math
 
 import backtrader as bt
 
+from app.backtesting.actions_broker import ActionsBroker
 from app.backtesting.metrics import metrics
 from app.core.schemas import ASSETS
+from app.data.actions import CorporateAction
+from app.data.errors import DataError
 from app.data.market import closing_times, validate
+from app.portfolio.ledger import Ledger
 from app.strategies.base import strategy_for
 
 
@@ -31,6 +35,7 @@ class ResearchStrategy(bt.Strategy):
         self.closes = closing_times(self.p.frame, self.p.request.asset, self.p.request.timeframe)
         self.pending = None
         self.recorded = {}
+        self.closed = self.broker.ledger.closed
 
     def notify_order(self, order):
         if order.status in (order.Completed, order.Partial):
@@ -40,6 +45,13 @@ class ResearchStrategy(bt.Strategy):
                 i = len(self.data) - 1
                 raw = float(self.p.frame.iloc[i].open)
                 cost = abs(quantity) * abs(order.executed.price - raw)
+                self.broker.ledger.fill(
+                    "buy" if quantity > 0 else "sell",
+                    abs(quantity),
+                    order.executed.price,
+                    order.executed.comm,
+                    self.p.frame.iloc[i].timestamp.isoformat(),
+                )
                 self.fills.append(
                     {
                         "timestamp": self.p.frame.iloc[i].timestamp.isoformat(),
@@ -61,16 +73,6 @@ class ResearchStrategy(bt.Strategy):
                 }
             )
 
-    def notify_trade(self, trade):
-        if trade.isclosed:
-            self.closed.append(
-                {
-                    "timestamp": self.p.frame.iloc[len(self.data) - 1].timestamp.isoformat(),
-                    "gross_pnl": trade.pnl,
-                    "net_pnl": trade.pnlcomm,
-                }
-            )
-
     def next(self):
         # A participation-capped partial order expires after its first executable bar.
         if self.pending and self.pending.alive():
@@ -82,7 +84,8 @@ class ResearchStrategy(bt.Strategy):
                 }
             )
         i = len(self.data) - 1
-        cash, equity = self.broker.getcash(), self.broker.getvalue()
+        cash = self.broker.getcash()
+        equity = self.broker.getvalue() + self.broker.receivable
         qty = self.position.size
         self.curve.append(
             {
@@ -91,12 +94,21 @@ class ResearchStrategy(bt.Strategy):
                 "cash": cash,
                 "quantity": qty,
                 "exposure": qty * self.data.close[0] / equity if equity else 0,
-                "unrealized_pnl": qty * (self.data.close[0] - self.position.price),
+                "unrealized_pnl": self.broker.ledger.unrealized(self.data.close[0]),
+                "dividend_receivable": self.broker.receivable,
             }
         )
         if i == len(self.p.frame) - 1:
             return
-        target = self.p.logic.target(self.p.frame.iloc[: i + 1])
+        history = self.p.frame.iloc[: i + 1]
+        history.attrs = {}  # Do not expose future action records through DataFrame metadata.
+        if self.broker.effective_splits:
+            history = history.copy()
+            for split_index, ratio in self.broker.effective_splits:
+                for column in ("open", "high", "low", "close"):
+                    history.loc[history.index[:split_index], column] /= ratio
+                history.loc[history.index[:split_index], "volume"] *= ratio
+        target = self.p.logic.target(history)
         # Buy once and retain shares, rather than continually rebalance the benchmark.
         if target and qty > 0:
             return
@@ -129,7 +141,14 @@ class ResearchStrategy(bt.Strategy):
 
 def run_engine(frame, req, logic=None):
     validate(frame, req.asset, req.timeframe)
+    actions = [CorporateAction.model_validate(action) for action in frame.attrs.get("corporate_actions", [])]
+    if req.provider == "alpaca" and ASSETS[req.asset] == "stock":
+        if "corporate_actions_verified" not in frame or not frame.corporate_actions_verified.all():
+            raise DataError("Real stock simulation needs verified corporate-action metadata")
+        if "corporate_actions" not in frame.attrs:
+            raise DataError("Real stock simulation is missing corporate-action records")
     cerebro = bt.Cerebro(stdstats=False)
+    cerebro.broker = ActionsBroker(frame=frame, actions=actions, ledger=Ledger(), req=req)
     feed = frame.set_index("timestamp")[["open", "high", "low", "close", "volume"]].copy()
     feed.index = feed.index.tz_localize(None)  # Backtrader internal UTC floats only.
     cerebro.adddata(bt.feeds.PandasData(dataname=feed))
@@ -142,11 +161,15 @@ def run_engine(frame, req, logic=None):
     def filler(order, price, ago):
         remaining = abs(order.executed.remsize)
         # Prior completed volume only; never use the future bar's total volume.
-        volume = float(order.data.volume[-1])
+        volume = float(order.data.volume[-1]) * cerebro.broker.split_factors[len(order.data) - 1]
         size = min(remaining, volume * req.max_participation)
         if order.isbuy():
             cash = cerebro.broker.getcash()
-            equity_open = cash + cerebro.broker.getposition(order.data).size * float(order.data.open[0])
+            equity_open = (
+                cash
+                + cerebro.broker.getposition(order.data).size * float(order.data.open[0])
+                + cerebro.broker.receivable
+            )
             budget = min(cash - equity_open * req.cash_reserve, equity_open * req.allocation)
             size = min(size, max(0, (budget - req.fixed_fee) / (price * (1 + req.commission_bps / 10000))))
         if not req.fractional:
@@ -158,10 +181,12 @@ def run_engine(frame, req, logic=None):
     strategy = cerebro.run()[0]
     if min(row["cash"] for row in strategy.curve) < -1e-7:
         raise RuntimeError("Cash invariant violated")
+    stats = metrics(strategy.curve, strategy.fills, strategy.closed, req.initial_cash, ASSETS[req.asset])
+    stats["dividend_income"] = cerebro.broker.ledger.dividend_income
+    stats["dividend_receivable"] = cerebro.broker.receivable
     return {
-        "metrics": metrics(
-            strategy.curve, strategy.fills, strategy.closed, req.initial_cash, ASSETS[req.asset]
-        ),
+        "metrics": stats,
+        "corporate_actions": cerebro.broker.events,
         "equity": strategy.curve,
         "trades": strategy.fills,
         "closed_trades": strategy.closed,
