@@ -119,3 +119,27 @@ def rollback(identifier):
         )
         atomic_json(folder() / "registry.json", state)
         return state
+
+
+def search_result(identifier):
+    path = folder() / "searches" / f"{safe_id(identifier)}.json"
+    return json.loads(path.read_text())
+
+
+def searches():
+    saved = []
+    for path in (folder() / "searches").glob("*.json"):
+        data = json.loads(path.read_text())
+        saved.append(
+            {
+                "id": data["id"],
+                "created_at": data["created_at"],
+                "status": data["status"],
+                "asset": data["config"]["research"]["backtest"]["asset"],
+                "provider": data["config"]["research"]["backtest"]["provider"],
+                "trials": len(data["trials"]),
+                "objective": data["config"]["objective"],
+                "winner_id": data["winner_id"],
+            }
+        )
+    return sorted(saved, key=lambda value: value["created_at"], reverse=True)

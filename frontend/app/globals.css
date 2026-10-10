@@ -326,3 +326,31 @@ details p {
 section {
   min-width: 0;
 }
+
+.search-settings {
+  border: 1px solid #35435a;
+  border-radius: 8px;
+  padding: 14px;
+  margin: 24px 0 0;
+  min-width: 0;
+}
+.search-settings legend {
+  color: #b6d5ee;
+  font-size: 13px;
+  padding: 0 6px;
+}
+.run.secondary {
+  background: #1b3040;
+  color: #a5e5d8;
+  border: 1px solid #376858;
+  margin-top: 8px;
+}
+.search-results {
+  min-width: 0;
+}
+.search-results tr[aria-selected="true"] {
+  background: #16322f;
+}
+.best-parameters {
+  color: #8ee2ce;
+}

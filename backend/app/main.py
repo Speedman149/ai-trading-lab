@@ -93,7 +93,7 @@ def equity(identifier: str):
 
 # Model research is deliberately separate from conventional backtests.
 from app.ml import jobs, storage
-from app.ml.schemas import ResearchJob, ResearchRequest, ResearchResult
+from app.ml.schemas import ResearchJob, ResearchRequest, ResearchResult, SearchRequest, SearchResult
 
 jobs.initialize()
 
@@ -179,3 +179,24 @@ def rollback_model(identifier: str):
         raise HTTPException(404, "Unknown model version") from exc
     except ValueError as exc:
         raise HTTPException(409, detail={"code": "rollback_rejected", "message": str(exc)}) from exc
+
+
+@app.post("/api/research/searches", response_model=ResearchJob, status_code=202)
+def search_parameters(req: SearchRequest):
+    try:
+        return jobs.submit_search(req)
+    except jobs.ResearchBusy as exc:
+        raise HTTPException(409, detail={"code": "research_busy", "message": str(exc)}) from exc
+
+
+@app.get("/api/research/searches")
+def parameter_searches():
+    return storage.searches()
+
+
+@app.get("/api/research/searches/{identifier}", response_model=SearchResult)
+def parameter_search_result(identifier: str):
+    try:
+        return storage.search_result(identifier)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Unknown parameter search") from exc

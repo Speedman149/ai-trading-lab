@@ -45,6 +45,28 @@ Regimes combine the preceding known 20-bar trend with a training-only median vol
 
 Seeing a holdout consumes it for human research. Rerunning many parameter choices and selecting the winner from the test table would overfit; reserve genuinely later data before drawing conclusions. Historical provider data/action revisions and survivorship in this small fixed asset set remain limitations.
 
+## Automatic parameter search
+
+Select XGBoost, choose a trial count (2–48, default 12), and click **Find best parameters**. Choose validation Sharpe (default) or validation net return as the ranking metric. The search always includes your current settings as trial 1, then samples unique combinations reproducibly with the research random seed.
+
+| Parameter | Sampled values |
+| --- | --- |
+| Maximum trees | 60, 120, 240, 400 |
+| Tree depth | 2, 3, 4, 5 |
+| Learning rate | 0.02, 0.05, 0.10, 0.20 |
+| Extra return hurdle (bps) | 0, 5, 10, 20 |
+| Entry probability | 0.50, 0.55, 0.60, 0.65 |
+
+The asset, provider, date range, forecast horizon, folds, final-test fraction, random seed and execution costs remain fixed. Each search downloads/validates one data snapshot and reuses it across trials. Every trial uses the same chronological purging, separate training/early-stopping/calibration blocks, causal features and broker simulation as manual training. This is a strategy-aware random search rather than an accuracy-only classifier grid search.
+
+Ranking is fixed before evaluation: candidates passing all promotion checks first, then candidates within the 20% drawdown and 20x turnover limits, then the chosen validation metric. Ties use the other trading metric, smaller drawdown, lower turnover, lower MAE and earlier trial. Undefined Sharpe ranks below all defined values. Failed trials remain visible with an error and no rank. The leaderboard includes returns, Sharpe, drawdown, turnover, trading costs, prediction error, directional accuracy, baseline-relative return and individual fold returns.
+
+Selection is persisted **before** final-test evaluation. Only the selected winner is fitted on pre-test history and evaluated on the reserved final test. Losing trials never evaluate that period. The winner is saved as a normal research version with a link to its search; no model is promoted automatically. **Use best-found settings** copies the winner and the matching data/cost configuration into the form. Saved searches and jobs survive page reloads; interrupted backend jobs are explicitly marked.
+
+"Best found" means best under this ranking among the sampled choices, not a proven optimum. Searching many combinations can overfit validation. Previously viewed holdouts and repeated searches of the same dates do not become independent again. A genuinely later period is needed for another independent assessment. This separation follows [scikit-learn's model-selection guidance](https://scikit-learn.org/stable/modules/cross_validation.html).
+
+API: POST /api/research/searches accepts {"research": <ResearchRequest>, "trials": 12, "objective": "sharpe"} and returns the usual background job with kind="search" and search_id. Poll GET /api/research/jobs/{id}; after completion result_id identifies the winner. GET /api/research/searches lists saved runs, and GET /api/research/searches/{search_id} returns the leaderboard and selection record. Q-learning parameter search is not included in this milestone.
+
 ## Reinforcement learning
 
 The initial RL experiment is tabular Q-learning, not PPO. Its Gymnasium environment drives the same Backtrader broker through completed-bar callbacks. It does not use a duplicate fill/cash simulator. Observations contain causal market features, cash ratio, exposure, equity ratio and drawdown. Actions target cash or long using existing entry sizing and execution constraints.

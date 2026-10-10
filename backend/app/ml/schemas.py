@@ -75,12 +75,47 @@ class ResearchResult(BaseModel):
     latest_prediction: dict
     warnings: list[str]
     assumptions: list[str]
+    search: dict | None = None
 
 
 class ResearchJob(BaseModel):
     id: str
+    kind: Literal["train", "search"] = "train"
+    search_id: str | None = None
     status: Literal["queued", "running", "completed", "failed", "interrupted"]
     progress: str
     created_at: str
     result_id: str | None = None
     error: str | None = None
+
+
+class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    research: ResearchRequest
+    trials: int = Field(12, ge=2, le=48)
+    objective: Literal["sharpe", "net_return"] = "sharpe"
+
+    @model_validator(mode="after")
+    def supervised(self):
+        if self.research.algorithm != "xgboost":
+            raise ValueError("Automatic parameter search currently supports XGBoost. Select XGBoost.")
+        return self
+
+
+class SearchResult(BaseModel):
+    id: str
+    status: Literal["running", "completed", "failed"]
+    created_at: str
+    config: SearchRequest
+    space: dict[str, list[int | float]]
+    selection_policy: str
+    code_version: str
+    provenance: DatasetProvenance
+    validation_start: str
+    validation_end: str
+    holdout_start: str
+    winner_id: str | None
+    selected_trial: int | None
+    trials: list[dict]
+    error: str | None
+    warnings: list[str]

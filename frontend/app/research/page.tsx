@@ -1,5 +1,9 @@
 "use client";
 import Link from "next/link";
+import SearchResults, {
+  type SearchReport,
+  type SearchSummary,
+} from "./search-results";
 import { useEffect, useState } from "react";
 import {
   ResponsiveContainer,
@@ -64,6 +68,8 @@ type Evaluation = {
 };
 type Job = {
   id: string;
+  kind?: "train" | "search";
+  search_id?: string | null;
   status: string;
   progress: string;
   result_id: string | null;
@@ -82,6 +88,7 @@ type Version = {
 };
 type Report = {
   id: string;
+  search?: { id: string } | null;
   created_at: string;
   config: {
     algorithm: string;
@@ -217,6 +224,15 @@ export default function ResearchPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submissionKind, setSubmissionKind] = useState<"train" | "search">(
+    "train",
+  );
+  const [searchTrials, setSearchTrials] = useState(12);
+  const [searchObjective, setSearchObjective] = useState<
+    "sharpe" | "net_return"
+  >("sharpe");
+  const [searchReport, setSearchReport] = useState<SearchReport | null>(null);
+  const [searchRuns, setSearchRuns] = useState<SearchSummary[]>([]);
   const [pendingAction, setPendingAction] = useState<{
     id: string;
     operation: "retrain" | "promote" | "rollback";
@@ -227,6 +243,9 @@ export default function ResearchPage() {
     job?.status === "running" ||
     job?.status === "queued";
   const running = training || pendingAction !== null;
+  const searching =
+    (submitting && submissionKind === "search") ||
+    (job?.kind === "search" && ["queued", "running"].includes(job.status));
   const reloadVersions = async () =>
     setVersions(await request<Version[]>("/api/research/versions"));
   useEffect(() => {
@@ -234,10 +253,12 @@ export default function ResearchPage() {
     Promise.all([
       request<Version[]>("/api/research/versions"),
       request<Job[]>("/api/research/jobs"),
+      request<SearchSummary[]>("/api/research/searches"),
     ])
-      .then(([saved, jobs]) => {
+      .then(([saved, jobs, searches]) => {
         if (mounted) {
           setVersions(saved);
+          setSearchRuns(searches);
           const current = jobs.find(
             (item) => item.status === "running" || item.status === "queued",
           );
@@ -263,12 +284,22 @@ export default function ResearchPage() {
           const result = await request<Report>(
             "/api/research/versions/" + next.result_id,
           );
-          const saved = await request<Version[]>("/api/research/versions");
+          const [saved, searches, found] = await Promise.all([
+            request<Version[]>("/api/research/versions"),
+            request<SearchSummary[]>("/api/research/searches"),
+            next.search_id
+              ? request<SearchReport>(
+                  "/api/research/searches/" + next.search_id,
+                )
+              : Promise.resolve(null),
+          ]);
           if (!cancelled) {
             setReport(result);
             setVersions(saved);
             setJob(next);
-            setPeriod("holdout");
+            setSearchRuns(searches);
+            setSearchReport(found);
+            setPeriod(found ? "validation" : "holdout");
           }
         } else if (["failed", "interrupted"].includes(next.status)) {
           setJob(next);
@@ -319,12 +350,7 @@ export default function ResearchPage() {
       )}
     </div>
   );
-  async function train(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setMessage("");
-    setSubmitting(true);
-    setReport(null);
+  function researchConfig() {
     const {
       asset,
       provider,
@@ -340,43 +366,122 @@ export default function ResearchPage() {
       max_participation,
       ...model
     } = form;
+    return {
+      ...model,
+      backtest: {
+        asset,
+        provider,
+        start,
+        end,
+        timeframe: "1d",
+        initial_cash,
+        commission_bps,
+        fixed_fee,
+        spread_bps,
+        slippage_bps,
+        allocation,
+        cash_reserve,
+        max_participation,
+      },
+    };
+  }
+  async function submitResearch(kind: "train" | "search") {
+    setError("");
+    setMessage("");
+    setSubmissionKind(kind);
+    setSubmitting(true);
+    setReport(null);
+    setSearchReport(null);
     try {
       setJob(
-        await request<Job>("/api/research/jobs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...model,
-            backtest: {
-              asset,
-              provider,
-              start,
-              end,
-              timeframe: "1d",
-              initial_cash,
-              commission_bps,
-              fixed_fee,
-              spread_bps,
-              slippage_bps,
-              allocation,
-              cash_reserve,
-              max_participation,
-            },
-          }),
-        }),
+        await request<Job>(
+          kind === "search" ? "/api/research/searches" : "/api/research/jobs",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              kind === "search"
+                ? {
+                    research: researchConfig(),
+                    trials: searchTrials,
+                    objective: searchObjective,
+                  }
+                : researchConfig(),
+            ),
+          },
+        ),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Training failed");
+      setError(e instanceof Error ? e.message : "Research request failed");
     } finally {
       setSubmitting(false);
     }
+  }
+  async function train(e: React.FormEvent) {
+    e.preventDefault();
+    await submitResearch("train");
+  }
+  async function findParameters() {
+    const formElement = document.getElementById(
+      "research-form",
+    ) as HTMLFormElement;
+    if (formElement.reportValidity()) await submitResearch("search");
+  }
+  async function loadSearch(id: string) {
+    setError("");
+    setMessage("");
+    try {
+      const found = await request<SearchReport>("/api/research/searches/" + id);
+      const winner = found.winner_id
+        ? await request<Report>("/api/research/versions/" + found.winner_id)
+        : null;
+      setSearchReport(found);
+      setReport(winner);
+      setPeriod("validation");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to load search");
+    }
+  }
+  function applyWinner() {
+    if (!searchReport) return;
+    const winner = searchReport.trials.find(
+      (trial) => trial.trial === searchReport.selected_trial,
+    );
+    if (!winner) return;
+    const base = searchReport.config.research;
+    const selected: Record<string, unknown> = {
+      ...base,
+      ...base.backtest,
+      ...winner.parameters,
+    };
+    setForm(
+      (old) =>
+        Object.fromEntries(
+          Object.entries(old).map(([key, value]) => [
+            key,
+            selected[key] ?? value,
+          ]),
+        ) as typeof defaults,
+    );
+    setSearchTrials(searchReport.config.trials);
+    setSearchObjective(searchReport.config.objective);
+    setMessage(
+      "Best-found settings and their data/cost configuration copied into the training form.",
+    );
   }
   async function load(id: string) {
     setError("");
     setMessage("");
     try {
-      setReport(await request<Report>("/api/research/versions/" + id));
-      setPeriod("holdout");
+      const saved = await request<Report>("/api/research/versions/" + id);
+      const found = saved.search
+        ? await request<SearchReport>(
+            "/api/research/searches/" + saved.search.id,
+          )
+        : null;
+      setReport(saved);
+      setSearchReport(found);
+      setPeriod(found ? "validation" : "holdout");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load model");
     }
@@ -396,6 +501,7 @@ export default function ResearchPage() {
       if (operation === "retrain") {
         setJob(response);
         setReport(null);
+        setSearchReport(null);
       } else {
         await reloadVersions();
         setMessage(
@@ -472,7 +578,7 @@ export default function ResearchPage() {
       </div>
       <div className="grid">
         <div>
-          <form className="panel" onSubmit={train}>
+          <form className="panel" id="research-form" onSubmit={train}>
             <h2>Train a candidate model</h2>
             <label htmlFor="provider">Data source</label>
             <select
@@ -613,11 +719,59 @@ export default function ResearchPage() {
             </details>
             <button className="run" disabled={running} aria-busy={training}>
               {training
-                ? "Training in progress…"
+                ? searching
+                  ? "Parameter search in progress…"
+                  : "Training in progress…"
                 : pendingAction
                   ? "Model update in progress…"
                   : "Train & Evaluate"}
             </button>
+            {form.algorithm === "xgboost" && (
+              <fieldset className="search-settings" disabled={running}>
+                <legend>Automatic parameter search</legend>
+                <label htmlFor="search-trials">Parameter trials (2–48)</label>
+                <input
+                  id="search-trials"
+                  type="number"
+                  min={2}
+                  max={48}
+                  step={1}
+                  required
+                  value={searchTrials}
+                  onChange={(e) => setSearchTrials(Number(e.target.value))}
+                />
+                <label htmlFor="search-objective">Rank candidates by</label>
+                <select
+                  id="search-objective"
+                  value={searchObjective}
+                  onChange={(e) =>
+                    setSearchObjective(
+                      e.target.value as "sharpe" | "net_return",
+                    )
+                  }
+                >
+                  <option value="sharpe">Validation Sharpe</option>
+                  <option value="net_return">Validation net return</option>
+                </select>
+                <p className="subtle" id="search-help">
+                  Compare your current settings with other tree counts, depths,
+                  learning rates, return hurdles and entry probabilities.
+                  Passing validation checks rank first, then candidates within
+                  risk limits, then your chosen metric. Only the winner is
+                  evaluated on the final test.
+                </p>
+                <button
+                  type="button"
+                  className="run secondary"
+                  disabled={running}
+                  aria-busy={searching}
+                  aria-describedby="search-help"
+                  onClick={findParameters}
+                >
+                  {searching ? "Searching parameters…" : "Find best parameters"}
+                </button>
+              </fieldset>
+            )}
             <p className="subtle">
               Chronological splits · Purged labels · Next-open fills
             </p>
@@ -668,6 +822,34 @@ export default function ResearchPage() {
               </div>
             ))}
           </div>
+          <div className="panel charts saved-searches">
+            <h2>Saved parameter searches</h2>
+            {searchRuns.length === 0 && (
+              <p>Your search history will appear here.</p>
+            )}
+            {searchRuns.slice(0, 6).map((run) => (
+              <div className="version" key={run.id}>
+                <strong>
+                  {run.asset} ·{" "}
+                  {run.provider === "synthetic" ? "SYNTHETIC" : "Alpaca"}
+                </strong>
+                <p>
+                  {run.trials} trials ·{" "}
+                  {run.objective === "sharpe" ? "Sharpe" : "Net return"} ·{" "}
+                  {run.status}
+                  <br />
+                  {run.created_at.slice(0, 16).replace("T", " ")}
+                </p>
+                <button
+                  type="button"
+                  disabled={running}
+                  onClick={() => loadSearch(run.id)}
+                >
+                  View search
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
         <section aria-live="polite">
           {error && (
@@ -679,9 +861,15 @@ export default function ResearchPage() {
           {training && (
             <div className="panel empty">
               <div>
-                <h2>Training and testing</h2>
+                <h2>
+                  {searching ? "Searching parameters" : "Training and testing"}
+                </h2>
                 <p role="status">
-                  {job?.progress || "Submitting training job…"}
+                  {job && ["queued", "running"].includes(job.status)
+                    ? job.progress
+                    : searching
+                      ? "Submitting parameter search…"
+                      : "Submitting training job…"}
                 </p>
                 <p className="subtle">
                   The backend keeps working if you leave this page.
@@ -689,7 +877,14 @@ export default function ResearchPage() {
               </div>
             </div>
           )}
-          {!report && !running && (
+          {searchReport && (
+            <SearchResults
+              result={searchReport}
+              running={running}
+              onApply={applyWinner}
+            />
+          )}
+          {!report && !searchReport && !running && (
             <div className="panel empty">
               <div>
                 <div className="mark">⌁</div>

@@ -123,6 +123,7 @@ See [docs/corporate-actions.md](docs/corporate-actions.md) for the supported eve
 Open **http://localhost:3000/research** (or select **AI Research** in the dashboard). Choose Alpaca and an asset, use at least two years of stock history, then **Train & Evaluate**. The current default is 2022-01-03 through 2025-01-01. Daily training runs as a background job.
 
 - XGBoost predicts next-open return and direction probability using causal features.
+- **Find best parameters** runs 2–48 reproducible parameter trials (12 by default), ranks walk-forward trading results by Sharpe or net return, and tests only the selected winner on the final held-out period. Saved leaderboards show prediction metrics, costs, drawdown, turnover, baselines and fold stability; **Use best-found settings** fills in the winning configuration.
 - Purged chronological walk-forward validation and a final held-out test keep training information separate.
 - MAE/RMSE, directional accuracy, temporal rank correlation, probability calibration, net return, drawdown, turnover, Sharpe, regimes and simple baselines are shown.
 - Experimental Q-learning uses a Gymnasium environment backed by the same execution broker, with net-equity rewards and an optional drawdown penalty.

@@ -14,8 +14,9 @@ from app.ml.evaluation import evaluate
 from app.ml.features import FEATURE_VERSION, FEATURES, chronological_plan, make_features, make_samples
 from app.ml.models import BoostModel
 from app.ml.rl import QModel
+from app.ml.schemas import ResearchRequest
 
-CODE_VERSION = "research-v4-" + ENGINE_VERSION
+CODE_VERSION = "research-v5-" + ENGINE_VERSION
 
 
 def load_model(identifier):
@@ -129,11 +130,7 @@ def acceptance(validation, algorithm, active):
     }
 
 
-def execute(config, progress=lambda message: None):
-    import pandas as pd
-
-    progress("Downloading and validating daily bars")
-    frame, provenance = load(config.backtest, refresh=config.refresh_data)
+def identity(config, provenance, selection=None):
     identity = {
         "config": config.model_dump(mode="json"),
         "provenance": provenance,
@@ -141,23 +138,48 @@ def execute(config, progress=lambda message: None):
         "feature_version": FEATURE_VERSION,
         "libraries": {p: importlib.metadata.version(p) for p in ("xgboost-cpu", "scikit-learn", "gymnasium")},
     }
-    identifier = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
-    path = storage.folder() / identifier
-    if (path / "result.json").exists():
-        progress("Loaded the identical saved model version")
-        return storage.result(identifier)
+    if selection is not None:
+        identity["search"] = selection
+    return identity
+
+
+def identifier(identity):
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def prepare(config, progress=lambda message: None):
+    progress("Downloading and validating daily bars")
+    frame, provenance = load(config.backtest, refresh=config.refresh_data)
     features = make_features(frame, config.backtest)
     samples = make_samples(frame, config.backtest, config.horizon)
     plan, training, holdout = chronological_plan(samples, config.holdout_fraction, config.folds)
     active = storage.registry()["active"].get(storage.key(config))
     if config.parent_id is not None:
         parent = storage.result(config.parent_id)
-        from app.ml.schemas import ResearchRequest
-
         if storage.key(ResearchRequest.model_validate(parent["config"])) != storage.key(config):
             raise DataError(
                 "Parent model must use the same asset, provider, algorithm, horizon and execution settings."
             )
+    return {
+        "frame": frame,
+        "features": features,
+        "plan": plan,
+        "training": training,
+        "holdout": holdout,
+        "provenance": provenance,
+        "active": active,
+    }
+
+
+def validate(config, prepared, progress=lambda message: None):
+    import pandas as pd
+
+    frame, features, plan, active = (
+        prepared["frame"],
+        prepared["features"],
+        prepared["plan"],
+        prepared["active"],
+    )
     blocks, walk_forward = [], []
     for index, (train, evaluation) in enumerate(plan):
         progress(f"Training walk-forward fold {index + 1}/{len(plan)}")
@@ -185,14 +207,6 @@ def execute(config, progress=lambda message: None):
     validation_rows = pd.concat([b[1] for b in blocks], ignore_index=True)
     oof = WalkForwardModel(blocks, config.algorithm)
     validation = evaluate(frame, features, validation_rows, oof, config, plan[0][0])
-    progress("Fitting final model without held-out labels")
-    final = (
-        BoostModel.fit(training, config)
-        if config.algorithm == "xgboost"
-        else QModel.fit(frame, features, training, config)
-    )
-    progress("Evaluating frozen model on final held-out period")
-    test = evaluate(frame, features, holdout, final, config, training)
     promotion = acceptance(validation, config.algorithm, active)
     comparison_id = active or config.parent_id
     if comparison_id:
@@ -234,6 +248,33 @@ def execute(config, progress=lambda message: None):
             }
         )
         promotion["eligible"] = all(c["passed"] for c in promotion["criteria"])
+    return {"validation": validation, "walk_forward": walk_forward, "promotion": promotion}
+
+
+def complete(config, prepared, validated, progress=lambda message: None, selection=None):
+    frame, features, training, holdout, provenance = (
+        prepared["frame"],
+        prepared["features"],
+        prepared["training"],
+        prepared["holdout"],
+        prepared["provenance"],
+    )
+    validation, walk_forward, promotion = (
+        validated["validation"],
+        validated["walk_forward"],
+        validated["promotion"],
+    )
+    identity_data = identity(config, provenance, selection)
+    identifier_value = identifier(identity_data)
+    path = storage.folder() / identifier_value
+    progress("Fitting final model without held-out labels")
+    final = (
+        BoostModel.fit(training, config)
+        if config.algorithm == "xgboost"
+        else QModel.fit(frame, features, training, config)
+    )
+    progress("Evaluating frozen model on final held-out period")
+    test = evaluate(frame, features, holdout, final, config, training)
     reference = distribution_reference(training)
     latest = features.tail(1)
     predicted, probability = final.predict(latest)
@@ -256,9 +297,9 @@ def execute(config, progress=lambda message: None):
             "Q-learning outputs cash/long actions from portfolio state; it does not estimate return probabilities."
         )
     result = dict(
-        id=identifier,
+        id=identifier_value,
         created_at=datetime.now(UTC).isoformat(),
-        **identity,
+        **identity_data,
         features=FEATURES,
         training={
             **final.metadata,
@@ -292,3 +333,13 @@ def execute(config, progress=lambda message: None):
     storage.atomic_json(path / "dataset-actions.json", frame.attrs.get("corporate_actions", []))
     storage.atomic_json(path / "result.json", result)
     return result
+
+
+def execute(config, progress=lambda message: None):
+    prepared = prepare(config, progress)
+    version = identifier(identity(config, prepared["provenance"]))
+    if (storage.folder() / version / "result.json").exists():
+        progress("Loaded the identical saved model version")
+        return storage.result(version)
+    validated = validate(config, prepared, progress)
+    return complete(config, prepared, validated, progress)

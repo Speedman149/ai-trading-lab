@@ -68,6 +68,16 @@ test("XGBoost training shows backend evaluation, calibration and saved versions"
     path: "../artifacts/ml-desktop.png",
     fullPage: true,
   });
+  // Reopen the exact manually trained version: later parameter searches can
+  // create newer versions for the same asset.
+  await page.route("**/api/research/versions", async (route) => {
+    const response = await route.fetch();
+    const saved = await response.json();
+    await route.fulfill({
+      json: saved.filter((version: { id: string }) => version.id === report.id),
+    });
+  });
+
   await page.reload();
   const saved = page
     .locator(".version")
