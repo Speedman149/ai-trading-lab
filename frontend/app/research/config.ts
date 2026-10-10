@@ -5,6 +5,7 @@ export const defaults = {
   end: "2025-01-01",
   algorithm: "xgboost",
   horizon: 1,
+  evaluation_anchor_horizon: null as number | null,
   folds: 3,
   holdout_fraction: 0.2,
   n_estimators: 160,
@@ -18,6 +19,10 @@ export const defaults = {
   colsample_bytree: 1,
   min_child_weight: 5,
   reg_lambda: 5,
+  training_window_months: 12,
+  recency_half_life_days: 90,
+  validation_scheme: "blocks",
+  stop_loss_pct: 0,
   seed: 42,
   episodes: 20,
   drawdown_penalty: 0,
@@ -39,6 +44,7 @@ export const defaults = {
 export type ResearchConfig = {
   algorithm: string;
   horizon: number;
+  evaluation_anchor_horizon?: number | null;
   folds: number;
   holdout_fraction: number;
   n_estimators: number;
@@ -73,6 +79,10 @@ export const parameterLabels: Record<string, string> = {
   learning_rate: "Learning rate",
   min_edge_bps: "Extra return hurdle (bps)",
   probability_threshold: "Entry probability",
+  training_window_months: "Training window (months)",
+  recency_half_life_days: "Recency half-life (days)",
+  validation_scheme: "Validation schedule",
+  stop_loss_pct: "Stop loss (%)",
   seed: "Random seed",
   feature_set: "Feature set",
   entry_rule: "Entry rule",
@@ -86,11 +96,22 @@ export function settingsFromConfig(config: ResearchConfig) {
   return Object.fromEntries(
     Object.entries(defaults).map(([key, fallback]) => [
       key,
-      flat[key] ?? fallback,
+      flat[key] ??
+        (key === "training_window_months" || key === "recency_half_life_days"
+          ? 0
+          : fallback),
     ]),
   ) as typeof defaults;
 }
 export function settingValue(key: string, value: unknown) {
+  if (key === "validation_scheme")
+    return value === "monthly" ? "Next calendar month" : "Fixed blocks";
+  if (key === "training_window_months" && Number(value) === 0)
+    return "All earlier history";
+  if (key === "recency_half_life_days" && Number(value) === 0)
+    return "Equal weights";
+  if (key === "stop_loss_pct")
+    return Number(value) === 0 ? "Disabled" : String(value) + "%";
   if (key === "feature_set")
     return value === "technical" ? "Expanded technical (17)" : "Basic (12)";
   if (key === "entry_rule")
@@ -103,6 +124,10 @@ export function settingValue(key: string, value: unknown) {
     key === "subsample" ||
     key === "colsample_bytree"
   )
-    return (Number(value) * 100).toFixed(0) + "%";
+    return (
+      (Number(value) * 100).toLocaleString("en-US", {
+        maximumFractionDigits: 3,
+      }) + "%"
+    );
   return String(value);
 }

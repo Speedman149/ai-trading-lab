@@ -23,7 +23,7 @@ def regime(row, volatility_threshold):
 
 def evaluation_frame(frame, rows):
     start = int(rows.bar_index.iloc[0])
-    last_exit = rows.label_end.iloc[-1]
+    last_exit = rows.attrs.get("simulation_end", rows.label_end.iloc[-1])
     end = int(frame.index[frame.timestamp == last_exit][0])
     sliced = frame.iloc[start : end + 1].copy().reset_index(drop=True)
     # Remove pre-window actions: this portfolio starts with cash, with no past entitlement.
@@ -87,12 +87,13 @@ def evaluate(frame, features, rows, model, config, training):
     test_frame = evaluation_frame(frame, rows)
     simulation = run_engine(test_frame, config.backtest, policy)
     dates = [row.timestamp.isoformat() for _, row in rows.iterrows()]
+    baseline_request = config.backtest.model_copy(update={"stop_loss_pct": 0})
     baselines = {
-        "cash": run_engine(test_frame, config.backtest, LookupPolicy({d: 0.0 for d in dates})),
-        "buy_hold": run_engine(test_frame, config.backtest, LookupPolicy({d: 1.0 for d in dates})),
+        "cash": run_engine(test_frame, baseline_request, LookupPolicy({d: 0.0 for d in dates})),
+        "buy_hold": run_engine(test_frame, baseline_request, LookupPolicy({d: 1.0 for d in dates})),
         "ma_crossover": run_engine(
             test_frame,
-            config.backtest,
+            baseline_request,
             LookupPolicy(
                 {
                     row.timestamp.isoformat(): float(row.ma_gap_10 < row.ma_gap_30)

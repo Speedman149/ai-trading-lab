@@ -45,6 +45,9 @@ def key(config):
     costs = {
         k: v for k, v in fields["backtest"].items() if k not in ("start", "end", "strategy", "fast", "slow")
     }
+    # Disabled stops preserve the family keys of existing saved registries.
+    if costs.get("stop_loss_pct") == 0:
+        costs.pop("stop_loss_pct")
     return hashlib.sha256(
         json.dumps(
             {"backtest": costs, "algorithm": config.algorithm, "horizon": config.horizon}, sort_keys=True

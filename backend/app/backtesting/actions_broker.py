@@ -16,12 +16,17 @@ class ActionsBroker(bt.brokers.BackBroker):
         self.events = []
         self.split_factors = [1.0] * len(frame)
         self.effective_splits = []
+        self.stop_latched = False
+        self.stop_triggered_this_bar = False
+        self.bar_sold = 0.0
 
     @property
     def receivable(self):
         return sum(item["amount"] for item in self.receivables)
 
     def next(self):
+        self.stop_triggered_this_bar = False
+        self.bar_sold = 0.0
         if self.cerebro.datas and len(self.cerebro.datas[0]):
             data = self.cerebro.datas[0]
             index = len(data) - 1
@@ -120,3 +125,54 @@ class ActionsBroker(bt.brokers.BackBroker):
                             }
                         )
         super().next()
+        self.protective_stop()
+        self._get_value()
+
+    def _execute(self, order, ago=None, price=None, cash=None, position=None, dtcoc=None):
+        before = order.executed.size
+        result = super()._execute(order, ago, price, cash, position, dtcoc)
+        if ago is not None and order.executed.size < before:
+            self.bar_sold += before - order.executed.size
+        return result
+
+    def protective_stop(self):
+        if not self.req.stop_loss_pct or not self.cerebro.datas:
+            return
+        data = self.cerebro.datas[0]
+        position = self.getposition(data)
+        if position.size <= 0:
+            self.stop_latched = False
+            return
+        stop = position.price * (1 - self.req.stop_loss_pct / 100)
+        opening = float(data.open[0])
+        if not self.stop_latched and float(data.low[0]) > stop:
+            return
+        raw = opening if self.stop_latched or opening <= stop else stop
+        self.stop_latched = self.stop_triggered_this_bar = True
+        # Open-time strategy instructions have already executed. Expire their
+        # remaining shares before submitting an intrabar risk exit.
+        for pending in list(self.pending):
+            if pending is not None and pending.alive() and pending.data is data:
+                self.cancel(pending)
+        order = self.sell(
+            self.cerebro.runningstrats[0],
+            data,
+            size=position.size,
+            exectype=bt.Order.Market,
+            _checksubmit=False,
+        )
+        order.addinfo(
+            signal_timestamp=self.frame.iloc[len(data) - 1].timestamp.isoformat(),
+            reason="stop_loss",
+            reference_price=raw,
+            stop_price=stop,
+        )
+        # Direct execution permits protection on the entry bar. OHLC determines
+        # touch/gap only; sizing reads the preceding completed bar's volume.
+        self.pending.remove(order)
+        impact = (self.req.spread_bps / 2 + self.req.slippage_bps) / 10000
+        self._execute(order, ago=0, price=raw * (1 - impact))
+        if order.alive():
+            order.cancel()
+            self.notify(order)
+        self.stop_latched = self.getposition(data).size > 0

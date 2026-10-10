@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 
 from app.data.errors import DataError
 from app.ml import service, storage
+from app.ml.features import make_samples
+from app.ml.grid import anchor_horizon, grid_candidates, grid_space, updated, value
+from app.ml.planning import for_candidate
 from app.ml.schemas import ResearchRequest
 
 SPACE = {
@@ -106,6 +109,10 @@ def neighbors(center):
 
 def candidate_plan(request, recorded_trials):
     """Adapt only to completed validation scores; never read a winner's test report."""
+    if request.mode == "grid":
+        for config in grid_candidates(request):
+            yield config, "grid", None
+        return
     if request.mode == "random":
         for index, config in enumerate(candidates(request)):
             yield config, "current" if index == 0 else "broad", None
@@ -180,16 +187,33 @@ def rank_trials(trials, objective):
 
 
 def execute(request, identifier, progress=lambda message: None):
-    prepared = service.prepare(request.research, progress)
+    space = grid_space(request) if request.mode == "grid" else ({} if request.mode == "local" else SPACE)
+    total = math.prod(map(len, space.values())) if request.mode == "grid" else request.trials
+    reference_config = request.research
+    if request.mode == "grid":
+        reference_config = updated(
+            reference_config,
+            {
+                "horizon": anchor_horizon(request, space),
+                "evaluation_anchor_horizon": anchor_horizon(request, space),
+                "folds": min(space.get("folds", [reference_config.folds])),
+            },
+        )
+    prepared = service.prepare(reference_config, progress)
+    if request.mode == "grid":
+        prepared["reference_samples"] = make_samples(
+            prepared["frame"], reference_config.backtest, reference_config.horizon
+        )
     result = {
         "id": storage.safe_id(identifier),
         "status": "running",
         "created_at": datetime.now(UTC).isoformat(),
         "config": request.model_dump(mode="json"),
-        "space": {} if request.mode == "local" else SPACE,
+        "space": space,
+        "total_combinations": total,
         "selection_policy": POLICY,
         "refinement": None
-        if request.mode == "random"
+        if request.mode in ("random", "grid")
         else {
             "steps": {
                 key: {"step": step, "minimum": low, "maximum": high}
@@ -208,7 +232,9 @@ def execute(request, identifier, progress=lambda message: None):
         "trials": [],
         "error": None,
         "warnings": [
-            "Best found in this sampled search, not a proven optimum. Searching more choices can overfit validation.",
+            "Every combination in the declared finite ranges is attempted; best within this grid is not a proven market optimum. More choices can overfit validation."
+            if request.mode == "grid"
+            else "Best found in this sampled search, not a proven optimum. Searching more choices can overfit validation.",
             "Only the selected winner is tested on the held-out period. Repeated searches or previously viewed reports consume its independence.",
         ],
     }
@@ -217,12 +243,26 @@ def execute(request, identifier, progress=lambda message: None):
     best = None
     try:
         for index, (config, phase, origin) in enumerate(candidate_plan(request, lambda: result["trials"]), 1):
+            parameter_keys = list(SPACE)
+            if request.mode == "grid":
+                parameter_keys += [
+                    key
+                    for key in (
+                        "horizon",
+                        "folds",
+                        "seed",
+                        "stop_loss_pct",
+                        "training_window_months",
+                        "recency_half_life_days",
+                    )
+                    if key not in parameter_keys
+                ]
             trial = {
                 "trial": index,
                 "phase": phase,
                 "origin_trial": origin,
                 "rank": None,
-                "parameters": {key: getattr(config, key) for key in SPACE},
+                "parameters": {key: value(config, key) for key in parameter_keys},
                 "status": "completed",
                 "error": None,
                 "metrics": None,
@@ -234,12 +274,11 @@ def execute(request, identifier, progress=lambda message: None):
                 "activity": None,
             }
             try:
+                trial_prepared = for_candidate(prepared, config) if request.mode == "grid" else prepared
                 validated = service.validate(
                     config,
-                    prepared,
-                    lambda message, i=index, stage=phase: progress(
-                        f"Trial {i}/{request.trials} ({stage}): {message}"
-                    ),
+                    trial_prepared,
+                    lambda message, i=index, stage=phase: progress(f"Trial {i}/{total} ({stage}): {message}"),
                 )
                 validation = validated["validation"]
                 metrics = validation["strategy"]["metrics"]
@@ -259,7 +298,7 @@ def execute(request, identifier, progress=lambda message: None):
                 if best is None or ranking_key(trial, request.objective) > ranking_key(
                     best[0], request.objective
                 ):
-                    best = (trial, config, validated)
+                    best = (trial, config, validated, trial_prepared)
             except Exception as exc:
                 logging.getLogger(__name__).exception("Parameter-search trial failed")
                 trial.update(
@@ -279,13 +318,13 @@ def execute(request, identifier, progress=lambda message: None):
         progress(f"Selected trial {best[0]['trial']}; fitting and testing only the winner")
         winner = service.complete(
             best[1],
-            prepared,
+            best[3],
             best[2],
             progress,
             selection={
                 "id": identifier,
                 "selected_trial": best[0]["trial"],
-                "trials": request.trials,
+                "trials": total,
                 "objective": request.objective,
                 "mode": request.mode,
                 "selection_policy": POLICY,

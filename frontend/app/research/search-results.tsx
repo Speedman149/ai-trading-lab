@@ -1,10 +1,11 @@
 "use client";
-import { parameterLabels, settingValue } from "./config";
+import { parameterLabels, settingValue, type ResearchConfig } from "./config";
 import type { ActivityData } from "./activity";
 export const searchMethodLabels = {
   random: "Broad random search",
   coarse_to_fine: "Broad then refine",
   local: "Refine current settings",
+  grid: "Exhaustive range grid",
 };
 export type SearchParameters = {
   n_estimators: number;
@@ -18,10 +19,16 @@ export type SearchParameters = {
   colsample_bytree?: number;
   min_child_weight?: number;
   reg_lambda?: number;
+  horizon?: number;
+  folds?: number;
+  seed?: number;
+  stop_loss_pct?: number;
+  training_window_months?: number;
+  recency_half_life_days?: number;
 };
 export type SearchTrial = {
   trial: number;
-  phase?: "current" | "broad" | "refine";
+  phase?: "current" | "broad" | "refine" | "grid";
   origin_trial?: number | null;
   rank: number | null;
   parameters: SearchParameters;
@@ -46,21 +53,15 @@ export type SearchReport = {
   status: string;
   created_at: string;
   config: {
-    research: Record<string, unknown> & {
-      backtest: {
-        asset: string;
-        provider: string;
-        start: string;
-        end: string;
-        [key: string]: unknown;
-      };
-    };
+    research: ResearchConfig;
     trials: number;
     objective: "sharpe" | "net_return";
-    mode?: "random" | "coarse_to_fine" | "local";
+    mode?: "random" | "coarse_to_fine" | "local" | "grid";
+    grid?: import("./grid-settings").Ranges;
   };
   space: Record<string, (string | number)[]>;
   selection_policy: string;
+  total_combinations?: number;
   refinement?: {
     steps: Record<string, { step: number; minimum: number; maximum: number }>;
     broad_trials: number;
@@ -116,7 +117,8 @@ export default function SearchResults({
           : "Alpaca history"}
         <br />
         {searchMethodLabels[result.config.mode || "random"]} ·{" "}
-        {result.trials.length} / {result.config.trials} trials · Ranked by
+        {result.trials.length} /{" "}
+        {result.total_combinations ?? result.config.trials} trials · Ranked by
         validation{" "}
         {result.config.objective === "sharpe" ? "Sharpe" : "net return"}
         <br />
@@ -307,10 +309,9 @@ export default function SearchResults({
             ))}
           </ul>
           <p className="subtle">
-            Your current settings are always included as trial 1. Broad
-            combinations use the same random seed. The data, horizon, costs and
-            validation split stay fixed. Refinement changes numeric settings
-            around validation leaders in smaller steps.
+            {result.config.mode === "grid"
+              ? "Every combination listed above was attempted. Trial order follows the ranges; the submitted settings may be outside them. Candidates share data, costs, sizing and comparison dates, including when horizon, folds or seed vary. Only validation chooses the winner."
+              : "Your current settings are included as trial 1. Broad combinations use a reproducible search seed. Data, horizon, folds, costs, stops and recent-data controls stay fixed. Refinement changes numeric settings around validation leaders in smaller steps."}
           </p>
         </details>
       )}

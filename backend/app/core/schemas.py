@@ -24,6 +24,7 @@ class BacktestRequest(BaseModel):
     allocation: float = Field(0.9, gt=0, le=1, allow_inf_nan=False)
     cash_reserve: float = Field(0.05, ge=0, lt=1, allow_inf_nan=False)
     max_participation: float = Field(0.01, gt=0, le=1, allow_inf_nan=False)
+    stop_loss_pct: float = Field(0, ge=0, le=50, allow_inf_nan=False)
     fractional: bool = True
     min_notional: float = Field(1, ge=0, le=1e6, allow_inf_nan=False)
 
@@ -56,6 +57,8 @@ class FillRecord(BaseModel):
     quantity: float
     price: float
     reference_open: float
+    reference_price: float | None = None
+    reason: str = "signal"
     commission: float
     spread_slippage_cost: float
     total_cost: float

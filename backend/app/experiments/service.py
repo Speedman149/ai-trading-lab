@@ -7,7 +7,7 @@ from app.core.config import ROOT
 from app.core.schemas import BacktestRequest
 from app.data.market import load
 
-CODE_VERSION = "backtest-v4-observation"
+CODE_VERSION = "backtest-v5-protective-stop"
 
 
 def execute(req: BacktestRequest):
@@ -21,7 +21,7 @@ def execute(req: BacktestRequest):
         "id": identifier,
         **identity,
         **run_engine(frame, req),
-        "benchmark": run_engine(frame, req.model_copy(update={"strategy": "buy_hold"})),
+        "benchmark": run_engine(frame, req.model_copy(update={"strategy": "buy_hold", "stop_loss_pct": 0})),
         "warnings": ["SYNTHETIC demonstration data: no historical investment conclusions."]
         if provenance["synthetic"]
         else [

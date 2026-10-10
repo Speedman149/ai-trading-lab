@@ -44,7 +44,8 @@ class ResearchStrategy(bt.Strategy):
             if quantity:
                 i = len(self.data) - 1
                 raw = float(self.p.frame.iloc[i].open)
-                cost = abs(quantity) * abs(order.executed.price - raw)
+                reference = order.info.get("reference_price", raw)
+                cost = abs(quantity) * abs(order.executed.price - reference)
                 self.broker.ledger.fill(
                     "buy" if quantity > 0 else "sell",
                     abs(quantity),
@@ -60,6 +61,8 @@ class ResearchStrategy(bt.Strategy):
                         "quantity": abs(quantity),
                         "price": order.executed.price,
                         "reference_open": raw,
+                        "reference_price": reference,
+                        "reason": order.info.get("reason", "signal"),
                         "commission": order.executed.comm,
                         "spread_slippage_cost": cost,
                         "total_cost": cost + order.executed.comm,
@@ -103,6 +106,8 @@ class ResearchStrategy(bt.Strategy):
             self.p.logic.observe(self.curve[-1].copy(), terminal)
         if terminal:
             return
+        if self.broker.stop_triggered_this_bar or self.broker.stop_latched:
+            return  # Finish a risk exit before taking a new close-time entry.
         history = self.p.frame.iloc[: i + 1]
         history.attrs = {}  # Do not expose future action records through DataFrame metadata.
         if self.broker.effective_splits:
@@ -165,7 +170,10 @@ def run_engine(frame, req, logic=None):
         remaining = abs(order.executed.remsize)
         # Prior completed volume only; never use the future bar's total volume.
         volume = float(order.data.volume[-1]) * cerebro.broker.split_factors[len(order.data) - 1]
-        size = min(remaining, volume * req.max_participation)
+        available = volume * req.max_participation
+        if order.info.get("reason") == "stop_loss":
+            available = max(0, available - cerebro.broker.bar_sold)
+        size = min(remaining, available)
         if order.isbuy():
             cash = cerebro.broker.getcash()
             equity_open = (

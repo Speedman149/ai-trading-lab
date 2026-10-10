@@ -1,5 +1,10 @@
 "use client";
 import Link from "next/link";
+import GridSettings, {
+  fixedGrid,
+  gridCount,
+  type Ranges,
+} from "./grid-settings";
 import SearchResults, {
   searchMethodLabels,
   type SearchReport,
@@ -45,6 +50,7 @@ type Simulation = {
     quantity: number;
     price: number;
     total_cost: number;
+    reason?: string;
   }[];
 };
 type Evaluation = {
@@ -109,6 +115,13 @@ type Report = {
     core_rows?: number;
     early_stopping_rows?: number;
     calibration_rows?: number;
+    regression_fit_rows?: number;
+    direction_fit_rows?: number;
+    recency?: {
+      oldest_weight: number;
+      newest_weight: number;
+      effective_samples: number;
+    };
   };
   validation: Evaluation;
   holdout: Evaluation;
@@ -160,8 +173,14 @@ const settingHelp: Partial<Record<keyof typeof defaults, string>> = {
     "Extra predicted return required above modeled round-trip trading costs. 5 bps = 0.05%.",
   probability_threshold:
     "Minimum estimated chance of a positive return to enter. 0.55 = 55%; the return hurdle must also pass.",
+  training_window_months:
+    "Only this many calendar months before each prediction block train the model. 0 keeps all earlier history; use 3 or more.",
+  recency_half_life_days:
+    "90 means a training row 90 days older has half the weight. 0 gives equal weights. This changes training, not reported return calculations.",
+  stop_loss_pct:
+    "0 disables. A 3% stop exits when the daily low reaches 3% below actual entry price. Gaps, fees and liquidity limits can produce a larger loss.",
   folds:
-    "Train on earlier history, test the next block, then expand training and repeat this many times.",
+    "Number of validation blocks for the fixed-block schedule. Monthly validation creates one block per calendar month.",
   seed: "Controls randomness so the same data and settings can reproduce a run. A higher number does not mean better predictions.",
   holdout_fraction:
     "Newest share of usable history reserved for the final test. 0.20 = 20%; it never trains the model.",
@@ -213,8 +232,11 @@ export default function ResearchPage() {
     "train",
   );
   const [searchTrials, setSearchTrials] = useState(32);
+  const [gridRanges, setGridRanges] = useState<Ranges>(() =>
+    fixedGrid(defaults),
+  );
   const [searchMode, setSearchMode] = useState<
-    "random" | "coarse_to_fine" | "local"
+    "random" | "coarse_to_fine" | "local" | "grid"
   >("coarse_to_fine");
   const [searchObjective, setSearchObjective] = useState<
     "sharpe" | "net_return"
@@ -330,7 +352,12 @@ export default function ResearchPage() {
   const change = (
     key: keyof typeof defaults,
     value: string | number | boolean,
-  ) => setForm((old) => ({ ...old, [key]: value }));
+  ) =>
+    setForm((old) => ({
+      ...old,
+      [key]: value,
+      ...(key === "horizon" ? { evaluation_anchor_horizon: null } : {}),
+    }));
   const numeric = (
     key: keyof typeof defaults,
     label: string,
@@ -374,6 +401,7 @@ export default function ResearchPage() {
       max_participation,
       fractional,
       min_notional,
+      stop_loss_pct,
       strategy,
       fast,
       slow,
@@ -381,6 +409,13 @@ export default function ResearchPage() {
     } = form;
     return {
       ...model,
+      ...(model.algorithm === "q_learning"
+        ? {
+            training_window_months: 0,
+            recency_half_life_days: 0,
+            validation_scheme: "blocks",
+          }
+        : {}),
       backtest: {
         asset,
         provider,
@@ -397,6 +432,7 @@ export default function ResearchPage() {
         max_participation,
         fractional,
         min_notional,
+        stop_loss_pct,
         strategy,
         fast,
         slow,
@@ -411,6 +447,13 @@ export default function ResearchPage() {
     setReport(null);
     setSearchReport(null);
     try {
+      if (kind === "search" && searchMode === "grid") {
+        const count = gridCount(gridRanges);
+        if (count === null || count < 1 || count > 256)
+          throw new Error(
+            "The complete grid must contain 1–256 combinations. Narrow the ranges or increase steps.",
+          );
+      }
       setJob(
         await request<Job>(
           kind === "search" ? "/api/research/searches" : "/api/research/jobs",
@@ -424,6 +467,7 @@ export default function ResearchPage() {
                     trials: searchTrials,
                     objective: searchObjective,
                     mode: searchMode,
+                    ...(searchMode === "grid" ? { grid: gridRanges } : {}),
                   }
                 : researchConfig(),
             ),
@@ -469,8 +513,22 @@ export default function ResearchPage() {
     if (!winner) return;
     const base = searchReport.config.research;
     setForm(
-      settingsFromConfig({ ...base, ...winner.parameters } as ResearchConfig),
+      settingsFromConfig({
+        ...base,
+        ...winner.parameters,
+        evaluation_anchor_horizon:
+          report?.config.evaluation_anchor_horizon ??
+          base.evaluation_anchor_horizon ??
+          null,
+        backtest: {
+          ...base.backtest,
+          ...(winner.parameters.stop_loss_pct === undefined
+            ? {}
+            : { stop_loss_pct: winner.parameters.stop_loss_pct }),
+        },
+      } as ResearchConfig),
     );
+    if (searchReport.config.grid) setGridRanges(searchReport.config.grid);
     document
       .getElementById("research-form")
       ?.scrollIntoView({ block: "start" });
@@ -783,6 +841,67 @@ export default function ResearchPage() {
                   </p>
                 </>
               )}
+              {form.algorithm === "xgboost" && (
+                <details open>
+                  <summary>Recent-data learning & risk</summary>
+                  <label htmlFor="validation_scheme">Validation schedule</label>
+                  <select
+                    id="validation_scheme"
+                    value={form.validation_scheme}
+                    onChange={(e) =>
+                      change("validation_scheme", e.target.value)
+                    }
+                  >
+                    <option value="blocks">Fixed walk-forward blocks</option>
+                    <option value="monthly">
+                      Train earlier months → next calendar month
+                    </option>
+                  </select>
+                  <div className="pair">
+                    {numeric(
+                      "training_window_months",
+                      "Training window (months, 0 = all)",
+                      0,
+                      60,
+                    )}
+                    {numeric(
+                      "recency_half_life_days",
+                      "Recency half-life (days, 0 = equal)",
+                      0,
+                      730,
+                      "any",
+                    )}
+                    {numeric(
+                      "stop_loss_pct",
+                      "Stop loss (%, 0 = disabled)",
+                      0,
+                      50,
+                      "any",
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      setForm((old) => ({
+                        ...old,
+                        training_window_months: 3,
+                        recency_half_life_days: 90,
+                        validation_scheme: "monthly",
+                      }))
+                    }
+                  >
+                    Use last 3 months → next month
+                  </button>
+                  <p className="subtle">
+                    Each validation month gets a fresh fit using only earlier
+                    known labels. The final held-out test uses one frozen model.
+                    Tree counts are selected with early stopping, then refitted
+                    on recent known training rows. Buy-and-hold remains a
+                    no-stop baseline.
+                  </p>
+                </details>
+              )}
               <div className="pair">
                 {numeric("folds", "Walk-forward folds", 2, 5)}
                 {numeric("seed", "Random seed", 0, 2147483647)}
@@ -844,32 +963,48 @@ export default function ResearchPage() {
                   <select
                     id="search-mode"
                     value={searchMode}
-                    onChange={(e) =>
-                      setSearchMode(e.target.value as typeof searchMode)
-                    }
+                    onChange={(e) => {
+                      const mode = e.target.value as typeof searchMode;
+                      if (mode === "grid") setGridRanges(fixedGrid(form));
+                      setSearchMode(mode);
+                    }}
                   >
                     <option value="coarse_to_fine">Broad then refine</option>
                     <option value="local">Refine current settings</option>
                     <option value="random">Broad random search</option>
+                    <option value="grid">Exhaustive range grid</option>
                   </select>
                   <p className="subtle">
                     {searchMode === "coarse_to_fine"
                       ? "Use half the trials for broad choices, then make smaller changes around the two best validation candidates."
                       : searchMode === "local"
                         ? "Keep the current feature set and entry rule. Try nearby thresholds and tree settings, plus paired entry thresholds."
-                        : "Sample widely spaced combinations across all feature sets, entry rules and tree settings."}
+                        : searchMode === "grid"
+                          ? "Test every combination of the declared min/max/step ranges."
+                          : "Sample widely spaced combinations across all feature sets, entry rules and tree settings."}
                   </p>
-                  <label htmlFor="search-trials">Parameter trials (2–48)</label>
-                  <input
-                    id="search-trials"
-                    type="number"
-                    min={2}
-                    max={48}
-                    step={1}
-                    required
-                    value={searchTrials}
-                    onChange={(e) => setSearchTrials(Number(e.target.value))}
-                  />
+                  {searchMode === "grid" && (
+                    <GridSettings
+                      ranges={gridRanges}
+                      onChange={setGridRanges}
+                      form={form}
+                    />
+                  )}
+                  <div hidden={searchMode === "grid"}>
+                    <label htmlFor="search-trials">
+                      Parameter trials (2–48)
+                    </label>
+                    <input
+                      id="search-trials"
+                      type="number"
+                      min={2}
+                      max={48}
+                      step={1}
+                      required
+                      value={searchTrials}
+                      onChange={(e) => setSearchTrials(Number(e.target.value))}
+                    />
+                  </div>
                   <label htmlFor="search-objective">Rank candidates by</label>
                   <select
                     id="search-objective"
@@ -884,8 +1019,9 @@ export default function ResearchPage() {
                     <option value="net_return">Validation net return</option>
                   </select>
                   <p className="subtle" id="search-help">
-                    Compare feature sets, entry rules, tree settings, sampling,
-                    regularization, return hurdles and entry probabilities.
+                    {searchMode === "grid"
+                      ? "The grid includes horizon, folds, seed, stop loss and recent-data controls."
+                      : "Sampled/refinement searches vary feature sets, entry rules, tree settings, sampling, regularization, return hurdles and probabilities; horizon, folds, seed, stop loss and recent-data controls stay at the form values."}
                     Passing validation checks rank first, then candidates within
                     risk limits, then your chosen metric. Only the winner is
                     evaluated on the final test.
@@ -1641,7 +1777,10 @@ export default function ResearchPage() {
                         {evaluation.strategy.trades.map((t, i) => (
                           <tr key={i}>
                             <td>{t.timestamp.slice(0, 16)}</td>
-                            <td>{t.side}</td>
+                            <td>
+                              {t.side}
+                              {t.reason === "stop_loss" ? " · stop loss" : ""}
+                            </td>
                             <td>{decimal(t.quantity, 6)}</td>
                             <td>{decimal(t.price, 2)}</td>
                             <td>{decimal(t.total_cost, 2)}</td>

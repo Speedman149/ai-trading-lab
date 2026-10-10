@@ -46,6 +46,13 @@ export default function ModelSettings({
     core_rows?: number;
     early_stopping_rows?: number;
     calibration_rows?: number;
+    regression_fit_rows?: number;
+    direction_fit_rows?: number;
+    recency?: {
+      oldest_weight: number;
+      newest_weight: number;
+      effective_samples: number;
+    };
   };
   search?: { id: string; selected_trial?: number } | null;
   retraining?: Retraining | null;
@@ -126,12 +133,33 @@ export default function ModelSettings({
       </p>
       {config.algorithm === "xgboost" && training.core_rows != null && (
         <p className="subtle" id="training-sample-help">
-          Final-model training uses {training.core_rows} rows to fit trees,{" "}
+          {training.regression_fit_rows != null
+            ? "Tree-count selection uses"
+            : "Final-model training uses"}{" "}
+          {training.core_rows} rows to fit initial trees,{" "}
           {training.early_stopping_rows} later rows to choose the tree count,
           and {training.calibration_rows} separate rows to calibrate
           probabilities. A one- or two-tree model means more trees did not
           improve its internal validation score. Raising the maximum alone may
           leave its predictions unchanged.
+        </p>
+      )}
+      {training.regression_fit_rows != null && (
+        <p className="subtle" id="recent-fit-help">
+          After tree-count selection, the return model refits on{" "}
+          {training.regression_fit_rows} known rows. The direction model refits
+          on {training.direction_fit_rows} rows before its separate
+          probability-calibration block.
+          {training.recency && (
+            <>
+              {" "}
+              Newest / oldest normalized weights:{" "}
+              {training.recency.newest_weight.toFixed(3)} /{" "}
+              {training.recency.oldest_weight.toFixed(3)}; effective weighted
+              sample size: {training.recency.effective_samples.toFixed(1)}.
+              Performance metrics count every evaluation day equally.
+            </>
+          )}
         </p>
       )}
       <div className="button-row">

@@ -14,16 +14,16 @@ from app.ml.evaluation import evaluate
 from app.ml.features import (
     FEATURE_VERSION,
     FEATURES,
-    chronological_plan,
     feature_names,
     make_features,
     make_samples,
 )
 from app.ml.models import BoostModel
+from app.ml.planning import plan as training_plan
 from app.ml.rl import QModel
 from app.ml.schemas import ResearchRequest
 
-CODE_VERSION = "research-v7-" + ENGINE_VERSION
+CODE_VERSION = "research-v8.1-" + ENGINE_VERSION
 
 
 def load_model(identifier):
@@ -162,8 +162,14 @@ def prepare(config, progress=lambda message: None):
     frame, provenance = load(config.backtest, refresh=config.refresh_data)
     features = make_features(frame, config.backtest)
     samples = make_samples(frame, config.backtest, config.horizon)
-    plan, training, holdout = chronological_plan(samples, config.holdout_fraction, config.folds)
-    active = storage.registry()["active"].get(storage.key(config))
+    anchor = (
+        make_samples(frame, config.backtest, config.evaluation_anchor_horizon)
+        if config.evaluation_anchor_horizon is not None
+        else None
+    )
+    plan, training, holdout = training_plan(samples, config, anchor)
+    active_by_family = storage.registry()["active"]
+    active = active_by_family.get(storage.key(config))
     if config.parent_id is not None:
         parent = storage.result(config.parent_id)
         if storage.key(ResearchRequest.model_validate(parent["config"])) != storage.key(config):
@@ -178,6 +184,7 @@ def prepare(config, progress=lambda message: None):
         "holdout": holdout,
         "provenance": provenance,
         "active": active,
+        "active_by_family": active_by_family,
     }
 
 
@@ -215,6 +222,8 @@ def validate(config, prepared, progress=lambda message: None):
         )
     progress("Evaluating combined out-of-sample validation")
     validation_rows = pd.concat([b[1] for b in blocks], ignore_index=True)
+    if "simulation_end" in blocks[-1][1].attrs:
+        validation_rows.attrs = {"simulation_end": blocks[-1][1].attrs["simulation_end"]}
     oof = WalkForwardModel(blocks, config.algorithm)
     validation = evaluate(frame, features, validation_rows, oof, config, plan[0][0])
     promotion = acceptance(validation, config.algorithm, active, config.entry_rule)
@@ -331,7 +340,9 @@ def complete(config, prepared, validated, progress=lambda message: None, selecti
             f"Features use the {config.feature_set if config.algorithm == 'xgboost' else 'basic'} set, completed daily bars, a 60-bar warm-up, and dimensionless causal split adjustment.",
             f"Entry rule: {config.entry_rule}. Probability-only policies ignore the return hurdle, but modeled trading costs still apply.",
             f"Return labels run from the next open to the open {config.horizon} bar(s) later, including split/dividend entitlement economics.",
-            "Expanding training folds purge every label whose endpoint reaches the next prediction boundary; all hyperparameters and hurdles are fixed before evaluation.",
+            f"Training uses {'monthly calendar blocks' if config.validation_scheme == 'monthly' else str(config.folds) + ' fixed blocks'}; window {config.training_window_months or 'all earlier'} months; recency half-life {config.recency_half_life_days or 'off'} days. Labels reaching each prediction boundary are purged.",
+            "Monthly refits apply to validation. The final held-out model stays frozen for the whole reserved test; final test rows never train it.",
+            f"Fixed protective stop: {config.backtest.stop_loss_pct}% of split-adjusted actual entry price (0 disables). Daily low triggers it, gaps use the opening price, plus costs and prior-volume limits. Baselines have no stop overlay.",
             "XGBoost uses separate chronological core, early-stopping, and calibration blocks; fitted final-model components see no held-out labels.",
             "Cash, buy-and-hold, MA and AI use identical evaluation windows, fresh initial capital, broker costs and constraints. MA uses 10/30 warmed-up causal features.",
             "Probability diagnostics include Brier, log loss, reliability bins and expected calibration error. Rank correlation is temporal Spearman within one asset, not cross-sectional ranking.",
